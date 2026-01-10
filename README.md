@@ -1,3 +1,6 @@
+
+<img width="1024" height="1024" alt="ms2" src="https://github.com/user-attachments/assets/dd137094-580c-42f2-8c05-84002bbbabdf" />
+
 # Micro-Swarm  
 **Biologisch inspiriertes, agentenbasiertes Schwarm- und Gedächtnissystem (C++17)**
 
@@ -578,3 +581,4 @@ Micro-Swarm ist bewusst in C++ implementiert, um deterministische Laufzeiten, Sp
 **Autor:**
 Ralf Krümmel
 Artificial Life / Emergent Systems / Low-Level Simulation
+
