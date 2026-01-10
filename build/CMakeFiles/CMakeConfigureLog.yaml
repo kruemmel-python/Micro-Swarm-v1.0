@@ -98,7 +98,7 @@ events:
       The output was:
       0
       MSBuild-Version 17.14.23+b0019275e für .NET Framework
-      Der Buildvorgang wurde am 09.01.2026 22:23:46 gestartet.
+      Der Buildvorgang wurde am 10.01.2026 07:09:54 gestartet.
       
       Projekt "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\4.1.0-rc2\\CompilerIdCXX\\CompilerIdCXX.vcxproj" auf Knoten "1" (Standardziele).
       PrepareForBuild:
@@ -127,7 +127,7 @@ events:
           0 Warnung(en)
           0 Fehler
       
-      Verstrichene Zeit 00:00:00.59
+      Verstrichene Zeit 00:00:00.89
       
       
       Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "CompilerIdCXX.exe"
@@ -3173,8 +3173,8 @@ events:
     checks:
       - "Detecting CXX compiler ABI info"
     directories:
-      source: "C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-e516cx"
-      binary: "C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-e516cx"
+      source: "C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-kwa8pn"
+      binary: "C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-kwa8pn"
     cmakeVariables:
       CMAKE_CXX_FLAGS: "/DWIN32 /D_WINDOWS /EHsc"
       CMAKE_CXX_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -3188,40 +3188,40 @@ events:
       variable: "CMAKE_CXX_ABI_COMPILED"
       cached: true
       stdout: |
-        Change Dir: 'C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-e516cx'
+        Change Dir: 'C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-kwa8pn'
         
-        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_c3c50.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_e9ac6.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
         MSBuild-Version 17.14.23+b0019275e für .NET Framework
-        Der Buildvorgang wurde am 09.01.2026 22:23:47 gestartet.
+        Der Buildvorgang wurde am 10.01.2026 07:09:56 gestartet.
         
-        Projekt "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-e516cx\\cmTC_c3c50.vcxproj" auf Knoten "1" (Standardziele).
+        Projekt "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kwa8pn\\cmTC_e9ac6.vcxproj" auf Knoten "1" (Standardziele).
         PrepareForBuild:
-          Das Verzeichnis "cmTC_c3c50.dir\\Debug\\" wird erstellt.
+          Das Verzeichnis "cmTC_e9ac6.dir\\Debug\\" wird erstellt.
           Die strukturierte Ausgabe ist aktiviert. Die Formatierung der Compilerdiagnose spiegelt die Fehlerhierarchie wider. Weitere Informationen finden Sie unter https://aka.ms/cpp/structured-output.
-          Das Verzeichnis "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-e516cx\\Debug\\" wird erstellt.
-          Das Verzeichnis "cmTC_c3c50.dir\\Debug\\cmTC_c3c50.tlog\\" wird erstellt.
+          Das Verzeichnis "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kwa8pn\\Debug\\" wird erstellt.
+          Das Verzeichnis "cmTC_e9ac6.dir\\Debug\\cmTC_e9ac6.tlog\\" wird erstellt.
         InitializeBuildStatus:
-          "cmTC_c3c50.dir\\Debug\\cmTC_c3c50.tlog\\unsuccessfulbuild" wird erstellt, da "AlwaysCreate" angegeben wurde.
-          Aktualisieren des Timestamps von "cmTC_c3c50.dir\\Debug\\cmTC_c3c50.tlog\\unsuccessfulbuild".
+          "cmTC_e9ac6.dir\\Debug\\cmTC_e9ac6.tlog\\unsuccessfulbuild" wird erstellt, da "AlwaysCreate" angegeben wurde.
+          Aktualisieren des Timestamps von "cmTC_e9ac6.dir\\Debug\\cmTC_e9ac6.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /Fo"cmTC_c3c50.dir\\Debug\\\\" /Fd"cmTC_c3c50.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.1\\Modules\\CMakeCXXCompilerABI.cpp"
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /Fo"cmTC_e9ac6.dir\\Debug\\\\" /Fd"cmTC_e9ac6.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.1\\Modules\\CMakeCXXCompilerABI.cpp"
           Microsoft (R) C/C++-Optimierungscompiler Version 19.44.35222 für x64
           Copyright (C) Microsoft Corporation. Alle Rechte vorbehalten.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /Fo"cmTC_c3c50.dir\\Debug\\\\" /Fd"cmTC_c3c50.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.1\\Modules\\CMakeCXXCompilerABI.cpp"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /Fo"cmTC_e9ac6.dir\\Debug\\\\" /Fd"cmTC_e9ac6.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.1\\Modules\\CMakeCXXCompilerABI.cpp"
           CMakeCXXCompilerABI.cpp
         Link:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-e516cx\\Debug\\cmTC_c3c50.exe" /INCREMENTAL /ILK:"cmTC_c3c50.dir\\Debug\\cmTC_c3c50.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-e516cx/Debug/cmTC_c3c50.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-e516cx/Debug/cmTC_c3c50.lib" /MACHINE:X64  /machine:x64 cmTC_c3c50.dir\\Debug\\CMakeCXXCompilerABI.obj
-          cmTC_c3c50.vcxproj -> C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-e516cx\\Debug\\cmTC_c3c50.exe
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kwa8pn\\Debug\\cmTC_e9ac6.exe" /INCREMENTAL /ILK:"cmTC_e9ac6.dir\\Debug\\cmTC_e9ac6.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-kwa8pn/Debug/cmTC_e9ac6.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-kwa8pn/Debug/cmTC_e9ac6.lib" /MACHINE:X64  /machine:x64 cmTC_e9ac6.dir\\Debug\\CMakeCXXCompilerABI.obj
+          cmTC_e9ac6.vcxproj -> C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kwa8pn\\Debug\\cmTC_e9ac6.exe
         FinalizeBuildStatus:
-          Die Datei "cmTC_c3c50.dir\\Debug\\cmTC_c3c50.tlog\\unsuccessfulbuild" wird gelöscht.
-          Aktualisieren des Timestamps von "cmTC_c3c50.dir\\Debug\\cmTC_c3c50.tlog\\cmTC_c3c50.lastbuildstate".
-        Die Erstellung von Projekt "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-e516cx\\cmTC_c3c50.vcxproj" ist abgeschlossen (Standardziele).
+          Die Datei "cmTC_e9ac6.dir\\Debug\\cmTC_e9ac6.tlog\\unsuccessfulbuild" wird gelöscht.
+          Aktualisieren des Timestamps von "cmTC_e9ac6.dir\\Debug\\cmTC_e9ac6.tlog\\cmTC_e9ac6.lastbuildstate".
+        Die Erstellung von Projekt "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kwa8pn\\cmTC_e9ac6.vcxproj" ist abgeschlossen (Standardziele).
         
         Der Buildvorgang wurde erfolgreich ausgeführt.
             0 Warnung(en)
             0 Fehler
         
-        Verstrichene Zeit 00:00:00.63
+        Verstrichene Zeit 00:00:00.87
         
       exitCode: 0
   -
@@ -4984,8 +4984,8 @@ events:
       - "D:/M-ZOA-GPU/vcpkg/scripts/buildsystems/vcpkg.cmake:862 (include)"
       - "CMakeLists.txt:72 (find_package)"
     directories:
-      source: "C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-bs10u5"
-      binary: "C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-bs10u5"
+      source: "C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-eikkdl"
+      binary: "C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-eikkdl"
     cmakeVariables:
       CMAKE_CXX_FLAGS: "/DWIN32 /D_WINDOWS /EHsc"
       CMAKE_CXX_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -4998,41 +4998,41 @@ events:
       variable: "OPENCL_VERSION_3_0"
       cached: true
       stdout: |
-        Change Dir: 'C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-bs10u5'
+        Change Dir: 'C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-eikkdl'
         
-        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_2cd20.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_d1d0e.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
         MSBuild-Version 17.14.23+b0019275e für .NET Framework
-        Der Buildvorgang wurde am 09.01.2026 22:23:48 gestartet.
+        Der Buildvorgang wurde am 10.01.2026 07:09:57 gestartet.
         
-        Projekt "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-bs10u5\\cmTC_2cd20.vcxproj" auf Knoten "1" (Standardziele).
+        Projekt "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-eikkdl\\cmTC_d1d0e.vcxproj" auf Knoten "1" (Standardziele).
         PrepareForBuild:
-          Das Verzeichnis "cmTC_2cd20.dir\\Debug\\" wird erstellt.
+          Das Verzeichnis "cmTC_d1d0e.dir\\Debug\\" wird erstellt.
           Die strukturierte Ausgabe ist aktiviert. Die Formatierung der Compilerdiagnose spiegelt die Fehlerhierarchie wider. Weitere Informationen finden Sie unter https://aka.ms/cpp/structured-output.
-          Das Verzeichnis "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-bs10u5\\Debug\\" wird erstellt.
-          Das Verzeichnis "cmTC_2cd20.dir\\Debug\\cmTC_2cd20.tlog\\" wird erstellt.
+          Das Verzeichnis "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-eikkdl\\Debug\\" wird erstellt.
+          Das Verzeichnis "cmTC_d1d0e.dir\\Debug\\cmTC_d1d0e.tlog\\" wird erstellt.
         InitializeBuildStatus:
-          "cmTC_2cd20.dir\\Debug\\cmTC_2cd20.tlog\\unsuccessfulbuild" wird erstellt, da "AlwaysCreate" angegeben wurde.
-          Aktualisieren des Timestamps von "cmTC_2cd20.dir\\Debug\\cmTC_2cd20.tlog\\unsuccessfulbuild".
+          "cmTC_d1d0e.dir\\Debug\\cmTC_d1d0e.tlog\\unsuccessfulbuild" wird erstellt, da "AlwaysCreate" angegeben wurde.
+          Aktualisieren des Timestamps von "cmTC_d1d0e.dir\\Debug\\cmTC_d1d0e.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /I"D:\\M-ZOA-GPU\\vcpkg\\installed\\x64-windows\\include" /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /std:c++17 /Fo"cmTC_2cd20.dir\\Debug\\\\" /Fd"cmTC_2cd20.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-bs10u5\\CheckSymbolExists.cxx"
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /I"D:\\M-ZOA-GPU\\vcpkg\\installed\\x64-windows\\include" /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /std:c++17 /Fo"cmTC_d1d0e.dir\\Debug\\\\" /Fd"cmTC_d1d0e.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-eikkdl\\CheckSymbolExists.cxx"
           Microsoft (R) C/C++-Optimierungscompiler Version 19.44.35222 für x64
           Copyright (C) Microsoft Corporation. Alle Rechte vorbehalten.
-          cl /c /I"D:\\M-ZOA-GPU\\vcpkg\\installed\\x64-windows\\include" /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /std:c++17 /Fo"cmTC_2cd20.dir\\Debug\\\\" /Fd"cmTC_2cd20.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-bs10u5\\CheckSymbolExists.cxx"
+          cl /c /I"D:\\M-ZOA-GPU\\vcpkg\\installed\\x64-windows\\include" /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /std:c++17 /Fo"cmTC_d1d0e.dir\\Debug\\\\" /Fd"cmTC_d1d0e.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-eikkdl\\CheckSymbolExists.cxx"
           CheckSymbolExists.cxx
           cl_version.h: CL_TARGET_OPENCL_VERSION is not defined. Defaulting to 300 (OpenCL 3.0)
         Link:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-bs10u5\\Debug\\cmTC_2cd20.exe" /INCREMENTAL /ILK:"cmTC_2cd20.dir\\Debug\\cmTC_2cd20.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-bs10u5/Debug/cmTC_2cd20.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-bs10u5/Debug/cmTC_2cd20.lib" /MACHINE:X64  /machine:x64 cmTC_2cd20.dir\\Debug\\CheckSymbolExists.obj
-          cmTC_2cd20.vcxproj -> C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-bs10u5\\Debug\\cmTC_2cd20.exe
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-eikkdl\\Debug\\cmTC_d1d0e.exe" /INCREMENTAL /ILK:"cmTC_d1d0e.dir\\Debug\\cmTC_d1d0e.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-eikkdl/Debug/cmTC_d1d0e.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/ralfk/Downloads/superpromt/micro_DB/build/CMakeFiles/CMakeScratch/TryCompile-eikkdl/Debug/cmTC_d1d0e.lib" /MACHINE:X64  /machine:x64 cmTC_d1d0e.dir\\Debug\\CheckSymbolExists.obj
+          cmTC_d1d0e.vcxproj -> C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-eikkdl\\Debug\\cmTC_d1d0e.exe
         FinalizeBuildStatus:
-          Die Datei "cmTC_2cd20.dir\\Debug\\cmTC_2cd20.tlog\\unsuccessfulbuild" wird gelöscht.
-          Aktualisieren des Timestamps von "cmTC_2cd20.dir\\Debug\\cmTC_2cd20.tlog\\cmTC_2cd20.lastbuildstate".
-        Die Erstellung von Projekt "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-bs10u5\\cmTC_2cd20.vcxproj" ist abgeschlossen (Standardziele).
+          Die Datei "cmTC_d1d0e.dir\\Debug\\cmTC_d1d0e.tlog\\unsuccessfulbuild" wird gelöscht.
+          Aktualisieren des Timestamps von "cmTC_d1d0e.dir\\Debug\\cmTC_d1d0e.tlog\\cmTC_d1d0e.lastbuildstate".
+        Die Erstellung von Projekt "C:\\Users\\ralfk\\Downloads\\superpromt\\micro_DB\\build\\CMakeFiles\\CMakeScratch\\TryCompile-eikkdl\\cmTC_d1d0e.vcxproj" ist abgeschlossen (Standardziele).
         
         Der Buildvorgang wurde erfolgreich ausgeführt.
             0 Warnung(en)
             0 Fehler
         
-        Verstrichene Zeit 00:00:00.58
+        Verstrichene Zeit 00:00:00.86
         
       exitCode: 0
   -
