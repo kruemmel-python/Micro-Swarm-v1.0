@@ -184,6 +184,8 @@ Die Query nutzt zuerst die raeumliche Naehe um das Parent-Cluster, faellt sonst 
 .\micro_swarm.exe --mode db_shell --db shop.myco --db-radius 5
 ```
 
+Die Chinook-Referenz definiert den vollständigen MycoDB-SQL-Dialekt.
+
 Beispiele:
 
 ```
