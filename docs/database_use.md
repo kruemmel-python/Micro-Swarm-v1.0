@@ -125,6 +125,8 @@ goto <payload_id>
 focus
 radius <N>
 unfocus
+delta
+merge
 <Table> <PKValue>
 <Table> <col>=<val>
 show <col1,col2,...>
@@ -145,12 +147,40 @@ stats
 schema Track
 Track AlbumId=1 show TrackId,Name,Milliseconds
 TrackId=13
-sql SELECT TrackId,Name FROM Track LIMIT 5
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1
 sql SELECT TrackId,Name FROM Track WHERE TrackId=1
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 AND GenreId=1
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 OR AlbumId=2
+sql SELECT TrackId,Name FROM Track WHERE NOT GenreId=1
+sql SELECT Name FROM Artist WHERE ArtistId IN (1,2,3,4)
+sql SELECT TrackId,Name FROM Track WHERE Milliseconds BETWEEN 200000 AND 300000
+sql SELECT Name FROM Artist WHERE Name LIKE 'A%'
+sql SELECT Name FROM Artist WHERE Name REGEXP '^A'
+sql SELECT Name FROM Artist WHERE Name IS NOT NULL LIMIT 5
 sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId
-sql SELECT TrackId,Name FROM Track WHERE AlbumId='1' ORDER BY TrackId
-
-
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId DESC LIMIT 5
+sql SELECT TrackId,Name FROM Track ORDER BY TrackId LIMIT 5 OFFSET 5
+sql SELECT TrackId,Name FROM Track ORDER BY 1 LIMIT 5
+sql SELECT DISTINCT GenreId FROM Track ORDER BY GenreId LIMIT 10
+sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING C > 5 ORDER BY C DESC LIMIT 10
+sql SELECT GenreId, AVG(Milliseconds) AS AvgMs FROM Track GROUP BY GenreId ORDER BY AvgMs DESC LIMIT 5
+sql SELECT AlbumId, SUM(Milliseconds) AS SumMs FROM Track GROUP BY AlbumId ORDER BY SumMs DESC LIMIT 5
+sql SELECT AlbumId, MIN(Milliseconds) AS MinMs, MAX(Milliseconds) AS MaxMs FROM Track GROUP BY AlbumId LIMIT 5
+sql SELECT t.Name, a.Title FROM Track t JOIN Album a ON t.AlbumId=a.AlbumId WHERE t.TrackId=13
+sql SELECT t.Name, a.Title FROM Track t LEFT JOIN Album a ON t.AlbumId=a.AlbumId WHERE a.AlbumId=1
+sql SELECT t.Name, a.Title FROM Track t RIGHT JOIN Album a ON t.AlbumId=a.AlbumId WHERE a.AlbumId=1
+sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING COUNT(*) > 5 ORDER BY C DESC LIMIT 5
+sql SELECT LOWER(Name) AS n FROM Artist ORDER BY n LIMIT 5
+sql SELECT UPPER(Name) AS n FROM Artist ORDER BY n LIMIT 5
+sql SELECT LENGTH(Name) AS L FROM Artist ORDER BY L DESC LIMIT 5
+sql SELECT SUBSTRING(Name,1,5) AS S FROM Artist ORDER BY S LIMIT 5
+sql SELECT CONCAT(FirstName,' ',LastName) AS FullName FROM employee ORDER BY FullName LIMIT 5
+sql SELECT Name FROM Artist a WHERE EXISTS (SELECT AlbumId FROM Album WHERE Album.ArtistId=a.ArtistId)
+sql SELECT * FROM Track CROSS JOIN MediaType LIMIT 3
+sql WITH top_albums AS (SELECT AlbumId FROM Track GROUP BY AlbumId HAVING COUNT(*) > 5) SELECT AlbumId FROM top_albums ORDER BY AlbumId
+sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING COUNT(*) > 5 ORDER BY C DESC LIMIT 5
+sql SELECT * FROM (SELECT ArtistId, Name FROM Artist) a WHERE a.ArtistId=1
+sql SELECT TrackId,Name,Milliseconds FROM Track WHERE AlbumId=1
 ```
 
 Bedeutung:
@@ -160,6 +190,8 @@ Bedeutung:
 - `radius 12` setzt den Suchradius fuer alle folgenden Anfragen.
 - `tables` listet alle Tabellen.
 - `schema <table>` zeigt bekannte Spalten.
+- `delta` zeigt ausstehende Delta-Writes.
+- `merge` fuehrt den Batch-Merge aus.
 - `show ...` filtert die Ausgabe auf Spalten.
 - `<Column>=<Value>` ohne Tabellennamen sucht global.
 - `sql <statement>` fuehrt SQL-Light aus (Phase 1).
@@ -204,6 +236,9 @@ IS NULL / IS NOT NULL
 ORDER BY Spaltenindex
 Funktionen: LOWER, UPPER, LENGTH, SUBSTRING, CONCAT
 FROM (SELECT ...) als Subquery
+INSERT INTO <table> [(<col>, ...)] VALUES (...)
+UPDATE <table> SET <col>=<val>[, ...] WHERE <col>=<val>
+DELETE FROM <table> WHERE <col>=<val>
 ```
 
 Hinweise:
@@ -211,6 +246,7 @@ Hinweise:
 - CTEs sind **nicht rekursiv**.
 - Numerische Literale koennen ohne Quotes genutzt werden (z. B. `AlbumId=1`).
 - `ORDER BY` sortiert numerisch, wenn beide Werte als Zahl parsebar sind.
+- INSERT/UPDATE/DELETE schreiben in den Delta-Store; `merge` fuehrt die Batch-Re-Clusterung aus.
 
 ## 7) Fehlerdiagnose
 

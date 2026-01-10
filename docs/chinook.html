@@ -165,6 +165,8 @@ playlisttrack: PlaylistId, TrackId
 <pre><code>help
 tables
 stats
+delta
+merge
 schema &lt;table&gt;
 goto &lt;payload_id&gt;
 focus
@@ -186,6 +188,8 @@ sql &lt;statement&gt;
 <li><code>help</code>: zeigt alle Befehle</li>
 <li><code>tables</code>: Tabellenliste</li>
 <li><code>stats</code>: Payload-Counts pro Tabelle</li>
+<li><code>delta</code>: zeigt Delta-Pending (Writes + Tombstones)</li>
+<li><code>merge</code>: Delta in Cluster re-clustern (Batch)</li>
 <li><code>schema &lt;table&gt;</code>: Spaltenliste</li>
 <li><code>goto &lt;payload_id&gt;</code>: Fokus setzen (Payload-ID)</li>
 <li><code>focus</code>: Fokus anzeigen</li>
@@ -243,77 +247,57 @@ sort reset
 <p>Parser-Garantie:<br>
 Alle in dieser Referenz aufgefuehrten SQL-Konstrukte werden vom aktuellen
 MycoDB-Parser vollstaendig unterstuetzt und sind Teil der stabilen API.</p>
-<p>Nicht unterstuetzt (bewusst): UPDATE / INSERT / DELETE, DDL (CREATE/ALTER/DROP), Transaktionen, Stored Procedures.</p>
-<p>1) SELECT + WHERE (Basis):</p>
+<p>Write-Hinweis: INSERT/UPDATE/DELETE schreiben in den Delta-Store (Merge on read). <code>merge</code> fuehrt die Batch-Re-Clusterung aus.</p>
+<p>Nicht unterstuetzt (bewusst): DDL (CREATE/ALTER/DROP), Transaktionen, Stored Procedures.</p>
 <pre><code>sql SELECT TrackId,Name FROM Track WHERE AlbumId=1
 sql SELECT TrackId,Name FROM Track WHERE TrackId=1
-</code></pre>
-<p>2) WHERE: AND / OR / NOT:</p>
-<pre><code>sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 AND GenreId=1
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 AND GenreId=1
 sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 OR AlbumId=2
 sql SELECT TrackId,Name FROM Track WHERE NOT GenreId=1
-</code></pre>
-<p>3) WHERE: IN / BETWEEN / LIKE / REGEXP:</p>
-<pre><code>sql SELECT Name FROM Artist WHERE ArtistId IN (1,2,3,4)
+sql SELECT Name FROM Artist WHERE ArtistId IN (1,2,3,4)
 sql SELECT TrackId,Name FROM Track WHERE Milliseconds BETWEEN 200000 AND 300000
 sql SELECT Name FROM Artist WHERE Name LIKE 'A%'
 sql SELECT Name FROM Artist WHERE Name REGEXP '^A'
-</code></pre>
-<p>4) WHERE: IS NULL / IS NOT NULL:</p>
-<pre><code>sql SELECT Name FROM Artist WHERE Name IS NOT NULL LIMIT 5
-</code></pre>
-<p>5) ORDER BY / LIMIT / OFFSET:</p>
-<pre><code>sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId
+sql SELECT Name FROM Artist WHERE Name IS NOT NULL LIMIT 5
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId
 sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId DESC LIMIT 5
 sql SELECT TrackId,Name FROM Track ORDER BY TrackId LIMIT 5 OFFSET 5
-</code></pre>
-<p>Hinweis: <code>ORDER BY</code> sortiert numerisch, wenn beide Werte als Zahl parsebar sind.</p>
-<p>6) ORDER BY Spaltenindex:</p>
-<pre><code>sql SELECT TrackId,Name FROM Track ORDER BY 1 LIMIT 5
-</code></pre>
-<p>7) DISTINCT:</p>
-<pre><code>sql SELECT DISTINCT GenreId FROM Track ORDER BY GenreId LIMIT 10
-</code></pre>
-<p>8) GROUP BY / HAVING / Aggregationen:</p>
-<pre><code>sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING C &gt; 5 ORDER BY C DESC LIMIT 10
+sql SELECT TrackId,Name FROM Track ORDER BY 1 LIMIT 5
+sql SELECT DISTINCT GenreId FROM Track ORDER BY GenreId LIMIT 10
+sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING C &gt; 5 ORDER BY C DESC LIMIT 10
 sql SELECT GenreId, AVG(Milliseconds) AS AvgMs FROM Track GROUP BY GenreId ORDER BY AvgMs DESC LIMIT 5
 sql SELECT AlbumId, SUM(Milliseconds) AS SumMs FROM Track GROUP BY AlbumId ORDER BY SumMs DESC LIMIT 5
 sql SELECT AlbumId, MIN(Milliseconds) AS MinMs, MAX(Milliseconds) AS MaxMs FROM Track GROUP BY AlbumId LIMIT 5
-</code></pre>
-<p>9) JOINs (Inner/Left/Right/Cross):</p>
-<pre><code>sql SELECT t.Name, a.Title FROM Track t JOIN Album a ON t.AlbumId=a.AlbumId WHERE t.TrackId=13
+sql SELECT t.Name, a.Title FROM Track t JOIN Album a ON t.AlbumId=a.AlbumId WHERE t.TrackId=13
 sql SELECT t.Name, a.Title FROM Track t LEFT JOIN Album a ON t.AlbumId=a.AlbumId WHERE a.AlbumId=1
 sql SELECT t.Name, a.Title FROM Track t RIGHT JOIN Album a ON t.AlbumId=a.AlbumId WHERE a.AlbumId=1
-sql SELECT * FROM Track CROSS JOIN MediaType LIMIT 3
-</code></pre>
-<p>10) UNION / UNION ALL:</p>
-<pre><code>sql SELECT TrackId FROM Track WHERE AlbumId=1 UNION SELECT TrackId FROM Track WHERE AlbumId=2
-sql SELECT TrackId FROM Track WHERE AlbumId=1 UNION ALL SELECT TrackId FROM Track WHERE AlbumId=1
-</code></pre>
-<p>11) Subqueries: IN / EXISTS / korreliert:</p>
-<pre><code>sql SELECT Name FROM Artist WHERE ArtistId IN (SELECT ArtistId FROM Album WHERE AlbumId=1)
-sql SELECT Name FROM Artist WHERE EXISTS (SELECT AlbumId FROM Album WHERE AlbumId=1)
-sql SELECT Name FROM Artist a WHERE EXISTS (SELECT AlbumId FROM Album WHERE Album.ArtistId=a.ArtistId)
-</code></pre>
-<p>12) CTE (WITH):</p>
-<pre><code>sql WITH top_albums AS (SELECT AlbumId FROM Track GROUP BY AlbumId HAVING COUNT(*) &gt; 5)
-SELECT AlbumId FROM top_albums ORDER BY AlbumId
-</code></pre>
-<p>13) Funktionen:</p>
-<pre><code>sql SELECT LOWER(Name) AS n FROM Artist ORDER BY n LIMIT 5
+sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING COUNT(*) &gt; 5 ORDER BY C DESC LIMIT 5
+sql SELECT LOWER(Name) AS n FROM Artist ORDER BY n LIMIT 5
 sql SELECT UPPER(Name) AS n FROM Artist ORDER BY n LIMIT 5
 sql SELECT LENGTH(Name) AS L FROM Artist ORDER BY L DESC LIMIT 5
 sql SELECT SUBSTRING(Name,1,5) AS S FROM Artist ORDER BY S LIMIT 5
 sql SELECT CONCAT(FirstName,' ',LastName) AS FullName FROM employee ORDER BY FullName LIMIT 5
+sql SELECT Name FROM Artist a WHERE EXISTS (SELECT AlbumId FROM Album WHERE Album.ArtistId=a.ArtistId)
+sql SELECT * FROM Track CROSS JOIN MediaType LIMIT 3
+sql WITH top_albums AS (SELECT AlbumId FROM Track GROUP BY AlbumId HAVING COUNT(*) &gt; 5) SELECT AlbumId FROM top_albums ORDER BY AlbumId
+sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING COUNT(*) &gt; 5 ORDER BY C DESC LIMIT 5
+sql SELECT * FROM (SELECT ArtistId, Name FROM Artist) a WHERE a.ArtistId=1
+sql SELECT TrackId,Name,Milliseconds FROM Track WHERE AlbumId=1
 </code></pre>
-<p>14) FROM Subquery:</p>
-<pre><code>sql SELECT * FROM (SELECT ArtistId, Name FROM Artist) a WHERE a.ArtistId=1
-</code></pre>
-<p>15) Sort (SQL-Result in der Shell):</p>
-<pre><code>sql SELECT TrackId,Name,Milliseconds FROM Track WHERE AlbumId=1
-sort Milliseconds num
+<p>Shell-Sort (letztes SQL-Result):</p>
+<pre><code>sort Milliseconds num
 sort TrackId desc num, Name asc
 sort reset
+</code></pre>
+<h2>SQL-Write Beispiele (Delta-Store)</h2>
+<pre><code>sql INSERT INTO playlist (PlaylistId, Name) VALUES (9999,'MycoWriteTest')
+sql SELECT PlaylistId,Name FROM playlist WHERE PlaylistId=9999
+sql UPDATE playlist SET Name='MycoWriteTest2' WHERE PlaylistId=9999
+sql SELECT PlaylistId,Name FROM playlist WHERE PlaylistId=9999
+sql DELETE FROM playlist WHERE PlaylistId=9999
+sql SELECT PlaylistId,Name FROM playlist WHERE PlaylistId=9999
+delta
+merge
 </code></pre>
 <hr>
 <p>Ende.</p>

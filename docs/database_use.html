@@ -222,6 +222,8 @@ goto &lt;payload_id&gt;
 focus
 radius &lt;N&gt;
 unfocus
+delta
+merge
 &lt;Table&gt; &lt;PKValue&gt;
 &lt;Table&gt; &lt;col&gt;=&lt;val&gt;
 show &lt;col1,col2,...&gt;
@@ -239,7 +241,40 @@ stats
 schema Track
 Track AlbumId=1 show TrackId,Name,Milliseconds
 TrackId=13
-sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId LIMIT 5
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1
+sql SELECT TrackId,Name FROM Track WHERE TrackId=1
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 AND GenreId=1
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 OR AlbumId=2
+sql SELECT TrackId,Name FROM Track WHERE NOT GenreId=1
+sql SELECT Name FROM Artist WHERE ArtistId IN (1,2,3,4)
+sql SELECT TrackId,Name FROM Track WHERE Milliseconds BETWEEN 200000 AND 300000
+sql SELECT Name FROM Artist WHERE Name LIKE 'A%'
+sql SELECT Name FROM Artist WHERE Name REGEXP '^A'
+sql SELECT Name FROM Artist WHERE Name IS NOT NULL LIMIT 5
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId DESC LIMIT 5
+sql SELECT TrackId,Name FROM Track ORDER BY TrackId LIMIT 5 OFFSET 5
+sql SELECT TrackId,Name FROM Track ORDER BY 1 LIMIT 5
+sql SELECT DISTINCT GenreId FROM Track ORDER BY GenreId LIMIT 10
+sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING C &gt; 5 ORDER BY C DESC LIMIT 10
+sql SELECT GenreId, AVG(Milliseconds) AS AvgMs FROM Track GROUP BY GenreId ORDER BY AvgMs DESC LIMIT 5
+sql SELECT AlbumId, SUM(Milliseconds) AS SumMs FROM Track GROUP BY AlbumId ORDER BY SumMs DESC LIMIT 5
+sql SELECT AlbumId, MIN(Milliseconds) AS MinMs, MAX(Milliseconds) AS MaxMs FROM Track GROUP BY AlbumId LIMIT 5
+sql SELECT t.Name, a.Title FROM Track t JOIN Album a ON t.AlbumId=a.AlbumId WHERE t.TrackId=13
+sql SELECT t.Name, a.Title FROM Track t LEFT JOIN Album a ON t.AlbumId=a.AlbumId WHERE a.AlbumId=1
+sql SELECT t.Name, a.Title FROM Track t RIGHT JOIN Album a ON t.AlbumId=a.AlbumId WHERE a.AlbumId=1
+sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING COUNT(*) &gt; 5 ORDER BY C DESC LIMIT 5
+sql SELECT LOWER(Name) AS n FROM Artist ORDER BY n LIMIT 5
+sql SELECT UPPER(Name) AS n FROM Artist ORDER BY n LIMIT 5
+sql SELECT LENGTH(Name) AS L FROM Artist ORDER BY L DESC LIMIT 5
+sql SELECT SUBSTRING(Name,1,5) AS S FROM Artist ORDER BY S LIMIT 5
+sql SELECT CONCAT(FirstName,' ',LastName) AS FullName FROM employee ORDER BY FullName LIMIT 5
+sql SELECT Name FROM Artist a WHERE EXISTS (SELECT AlbumId FROM Album WHERE Album.ArtistId=a.ArtistId)
+sql SELECT * FROM Track CROSS JOIN MediaType LIMIT 3
+sql WITH top_albums AS (SELECT AlbumId FROM Track GROUP BY AlbumId HAVING COUNT(*) &gt; 5) SELECT AlbumId FROM top_albums ORDER BY AlbumId
+sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING COUNT(*) &gt; 5 ORDER BY C DESC LIMIT 5
+sql SELECT * FROM (SELECT ArtistId, Name FROM Artist) a WHERE a.ArtistId=1
+sql SELECT TrackId,Name,Milliseconds FROM Track WHERE AlbumId=1
 </code></pre>
 <p>Bedeutung:</p>
 <ul>
@@ -249,6 +284,8 @@ sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId LIMIT 5
 <li><code>radius 12</code> setzt den Suchradius fuer alle folgenden Anfragen.</li>
 <li><code>tables</code> listet alle Tabellen.</li>
 <li><code>schema &lt;table&gt;</code> zeigt bekannte Spalten.</li>
+<li><code>delta</code> zeigt ausstehende Delta-Writes.</li>
+<li><code>merge</code> fuehrt den Batch-Merge aus.</li>
 <li><code>show ...</code> filtert die Ausgabe auf Spalten.</li>
 <li><code>&lt;Column&gt;=&lt;Value&gt;</code> ohne Tabellennamen sucht global.</li>
 <li><code>sql &lt;statement&gt;</code> fuehrt SQL-Light aus (Phase 1).</li>
@@ -280,6 +317,9 @@ IS NULL / IS NOT NULL
 ORDER BY Spaltenindex
 Funktionen: LOWER, UPPER, LENGTH, SUBSTRING, CONCAT
 FROM (SELECT ...) als Subquery
+INSERT INTO &lt;table&gt; [(&lt;col&gt;, ...)] VALUES (...)
+UPDATE &lt;table&gt; SET &lt;col&gt;=&lt;val&gt;[, ...] WHERE &lt;col&gt;=&lt;val&gt;
+DELETE FROM &lt;table&gt; WHERE &lt;col&gt;=&lt;val&gt;
 </code></pre>
 <p>Hinweise:</p>
 <ul>
@@ -287,6 +327,7 @@ FROM (SELECT ...) als Subquery
 <li>CTEs sind <strong>nicht rekursiv</strong>.</li>
 <li>Numerische Literale koennen ohne Quotes genutzt werden (z. B. <code>AlbumId=1</code>).</li>
 <li><code>ORDER BY</code> sortiert numerisch, wenn beide Werte als Zahl parsebar sind.</li>
+<li>INSERT/UPDATE/DELETE schreiben in den Delta-Store; <code>merge</code> fuehrt die Batch-Re-Clusterung aus.</li>
 </ul>
 <h2>7) Fehlerdiagnose</h2>
 <ul>
