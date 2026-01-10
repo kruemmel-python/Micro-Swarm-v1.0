@@ -1,3 +1,6 @@
+
+<img width="1024" height="1024" alt="ms2" src="https://github.com/user-attachments/assets/fe9f85ed-b8dc-46fc-8a8f-07ff6445e7fa" />
+
 # Micro-Swarm  
 **Biologisch inspiriertes, agentenbasiertes Schwarm- und Gedächtnissystem (C++17)**
 
