@@ -10,7 +10,7 @@ struct DbSqlResult {
     std::vector<std::vector<std::string>> rows;
 };
 
-bool db_execute_sql(const DbWorld &world,
+bool db_execute_sql(DbWorld &world,
                     const std::string &sql,
                     bool use_focus,
                     int focus_x,

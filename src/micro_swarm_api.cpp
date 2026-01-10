@@ -1228,8 +1228,22 @@ int ms_db_get_payload_count(ms_db_handle_t *h) {
 int ms_db_find_payload_by_id(ms_db_handle_t *h, int payload_id) {
     if (!h) return -1;
     auto *ctx = reinterpret_cast<MicroSwarmDbContext *>(h);
+    for (const auto &pair : ctx->world.delta_index_by_key) {
+        int idx = pair.second;
+        if (idx < 0 || idx >= static_cast<int>(ctx->world.payloads.size())) continue;
+        const DbPayload &p = ctx->world.payloads[static_cast<size_t>(idx)];
+        int64_t key = db_payload_key(p.table_id, p.id);
+        if (ctx->world.tombstones.find(key) != ctx->world.tombstones.end()) continue;
+        if (p.id == payload_id) {
+            return idx;
+        }
+    }
     for (size_t i = 0; i < ctx->world.payloads.size(); ++i) {
-        if (ctx->world.payloads[i].id == payload_id) {
+        const DbPayload &p = ctx->world.payloads[i];
+        int64_t key = db_payload_key(p.table_id, p.id);
+        if (ctx->world.tombstones.find(key) != ctx->world.tombstones.end()) continue;
+        if (!p.is_delta && ctx->world.delta_index_by_key.find(key) != ctx->world.delta_index_by_key.end()) continue;
+        if (p.id == payload_id) {
             return static_cast<int>(i);
         }
     }

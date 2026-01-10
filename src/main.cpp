@@ -83,6 +83,10 @@ struct CliOptions {
     std::string db_path;
     std::string db_query;
     int db_radius = 5;
+    int db_merge_agents = 256;
+    int db_merge_steps = 2000;
+    uint32_t db_merge_seed = 42;
+    int db_merge_threshold = 0;
     std::string sql_output_format = "table";
 };
 
@@ -176,6 +180,10 @@ void print_help() {
               << "  --db PATH       MYCO-Input fuer db_query\n"
               << "  --query TEXT    Query fuer db_query (SQL-Light)\n"
               << "  --db-radius N   Radius fuer db_query (Default 5)\n"
+              << "  --db-merge-agents N   Agentenanzahl fuer Merge (Default 256)\n"
+              << "  --db-merge-steps N    Schritte fuer Merge (Default 2000)\n"
+              << "  --db-merge-seed N     Seed fuer Merge (Default 42)\n"
+              << "  --db-merge-threshold N  Auto-Merge ab Delta-Size N (0=aus)\n"
               << "  --sql-format F  Output-Format fuer SQL (table|csv|json)\n"
               << "  --width N        Rasterbreite\n"
               << "  --height N       Rasterhoehe\n"
@@ -429,6 +437,28 @@ bool parse_cli(int argc, char **argv, CliOptions &opts) {
             }
         } else if (arg == "--db-radius") {
             if (!parse_int(value, opts.db_radius)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+        } else if (arg == "--db-merge-agents") {
+            if (!parse_int(value, opts.db_merge_agents)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+        } else if (arg == "--db-merge-steps") {
+            if (!parse_int(value, opts.db_merge_steps)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+        } else if (arg == "--db-merge-seed") {
+            uint32_t seed_val = 0;
+            if (!parse_seed(value, seed_val)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+            opts.db_merge_seed = seed_val;
+        } else if (arg == "--db-merge-threshold") {
+            if (!parse_int(value, opts.db_merge_threshold)) {
                 std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
                 return false;
             }
@@ -804,7 +834,9 @@ int main(int argc, char **argv) {
             return s;
         };
         std::string qlower = lower_copy(qtrim);
-        if (qlower.rfind("select", 0) == 0 || qlower.rfind("with", 0) == 0) {
+        if (qlower.rfind("select", 0) == 0 || qlower.rfind("with", 0) == 0 ||
+            qlower.rfind("insert", 0) == 0 || qlower.rfind("update", 0) == 0 ||
+            qlower.rfind("delete", 0) == 0) {
             DbSqlResult result;
             if (!db_execute_sql(world, opts.db_query, false, 0, 0, opts.db_radius, result, error)) {
                 std::cerr << "SQL-Fehler: " << error << "\n";
@@ -839,12 +871,19 @@ int main(int argc, char **argv) {
             std::cerr << "MYCO-Fehler: " << error << "\n";
             return 1;
         }
+        DbIngestConfig merge_cfg;
+        merge_cfg.agent_count = opts.db_merge_agents;
+        merge_cfg.steps = opts.db_merge_steps;
+        merge_cfg.seed = opts.db_merge_seed;
         bool focus_set = false;
         int focus_x = 0;
         int focus_y = 0;
         int radius = opts.db_radius;
 
         std::string shell_format = opts.sql_output_format;
+        DbSqlResult last_sql_result;
+        DbSqlResult last_sql_original;
+        bool last_sql_valid = false;
         std::cout << "myco shell bereit. 'help' fuer Befehle, 'exit' zum Beenden.\n";
         for (;;) {
             std::cout << "myco> ";
@@ -871,10 +910,15 @@ int main(int argc, char **argv) {
                 std::cout << "  focus                   -> Aktuellen Fokus anzeigen\n";
                 std::cout << "  tables                  -> Tabellenliste\n";
                 std::cout << "  stats                   -> Payload-Counts pro Tabelle\n";
+                std::cout << "  delta                   -> Delta-Status\n";
+                std::cout << "  merge                   -> Delta in Cluster mergen\n";
                 std::cout << "  schema <table>           -> Spaltenliste\n";
                 std::cout << "  <Table> ... show Cols    -> Ausgabe auf Spalten filtern\n";
                 std::cout << "  Col=Value                -> Globale Spaltenabfrage\n";
-                std::cout << "  sql <statement>          -> SQL-Light Query\n";
+                std::cout << "  sql <statement>          -> SQL (SELECT/INSERT/UPDATE/DELETE)\n";
+                std::cout << "  sort <col|index> [asc|desc] [num][, <col|index> [asc|desc] [num] ...]\n";
+                std::cout << "                           -> Letztes SQL-Result sortieren\n";
+                std::cout << "  sort reset               -> Letztes SQL-Result zuruecksetzen\n";
                 std::cout << "  format <table|csv|json>  -> SQL-Output-Format\n";
                 std::cout << "  exit                    -> Beenden\n";
                 continue;
@@ -898,6 +942,9 @@ int main(int argc, char **argv) {
                 }
                 bool found = false;
                 for (const auto &p : world.payloads) {
+                    int64_t key = db_payload_key(p.table_id, p.id);
+                    if (world.tombstones.find(key) != world.tombstones.end()) continue;
+                    if (!p.is_delta && world.delta_index_by_key.find(key) != world.delta_index_by_key.end()) continue;
                     if (p.id == payload_id && p.placed) {
                         focus_x = p.x;
                         focus_y = p.y;
@@ -930,6 +977,147 @@ int main(int argc, char **argv) {
                 std::cout << "radius=" << radius << "\n";
                 continue;
             }
+            if (line.rfind("sort", 0) == 0) {
+                std::string args = trim_ws(line.substr(4));
+                if (!last_sql_valid) {
+                    std::cout << "Kein SQL-Result vorhanden.\n";
+                    continue;
+                }
+                if (args == "reset") {
+                    last_sql_result = last_sql_original;
+                    print_sql_result(last_sql_result, shell_format);
+                    continue;
+                }
+                if (args.empty()) {
+                    std::cout << "Sort benoetigt eine Spalte oder einen Index.\n";
+                    continue;
+                }
+                std::vector<std::string> tokens;
+                {
+                    std::stringstream ss(args);
+                    std::string tok;
+                    while (ss >> tok) {
+                        tokens.push_back(tok);
+                    }
+                }
+                if (tokens.empty()) {
+                    std::cout << "Sort benoetigt eine Spalte oder einen Index.\n";
+                    continue;
+                }
+                struct SortKey {
+                    int col_index = -1;
+                    bool asc = true;
+                    bool numeric = false;
+                };
+                auto lower_copy = [](std::string s) {
+                    for (char &c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    return s;
+                };
+                std::vector<SortKey> keys;
+                bool bad = false;
+                std::stringstream ss(args);
+                std::string segment;
+                while (std::getline(ss, segment, ',')) {
+                    std::string seg = trim_ws(segment);
+                    if (seg.empty()) continue;
+                    std::vector<std::string> parts;
+                    {
+                        std::stringstream ps(seg);
+                        std::string tok;
+                        while (ps >> tok) {
+                            parts.push_back(tok);
+                        }
+                    }
+                    if (parts.empty()) continue;
+                    SortKey key;
+                    std::string col_key = parts[0];
+                    for (size_t i = 1; i < parts.size(); ++i) {
+                        std::string opt = lower_copy(parts[i]);
+                        if (opt == "asc") {
+                            key.asc = true;
+                        } else if (opt == "desc") {
+                            key.asc = false;
+                        } else if (opt == "num" || opt == "numeric") {
+                            key.numeric = true;
+                        } else {
+                            std::cout << "Ungueltige Sort-Option: " << parts[i] << "\n";
+                            bad = true;
+                            break;
+                        }
+                    }
+                    if (bad) break;
+                    int col_index = -1;
+                    bool is_index = !col_key.empty() && std::all_of(col_key.begin(), col_key.end(), [](unsigned char c) {
+                        return c >= '0' && c <= '9';
+                    });
+                    if (is_index) {
+                        try {
+                            int idx = std::stoi(col_key);
+                            col_index = idx - 1;
+                        } catch (...) {
+                            col_index = -1;
+                        }
+                    } else {
+                        std::string want = lower_copy(col_key);
+                        for (size_t i = 0; i < last_sql_result.columns.size(); ++i) {
+                            if (lower_copy(last_sql_result.columns[i]) == want) {
+                                col_index = static_cast<int>(i);
+                                break;
+                            }
+                        }
+                    }
+                    if (col_index < 0 || col_index >= static_cast<int>(last_sql_result.columns.size())) {
+                        std::cout << "Spalte nicht gefunden.\n";
+                        bad = true;
+                        break;
+                    }
+                    key.col_index = col_index;
+                    keys.push_back(key);
+                }
+                if (bad || keys.empty()) {
+                    continue;
+                }
+                auto parse_number = [](const std::string &s, double &out) -> bool {
+                    try {
+                        size_t idx = 0;
+                        out = std::stod(s, &idx);
+                        return idx > 0;
+                    } catch (...) {
+                        return false;
+                    }
+                };
+                std::vector<size_t> order_idx(last_sql_result.rows.size());
+                for (size_t i = 0; i < order_idx.size(); ++i) order_idx[i] = i;
+                std::stable_sort(order_idx.begin(), order_idx.end(), [&](size_t ia, size_t ib) {
+                    const auto &ra = last_sql_result.rows[ia];
+                    const auto &rb = last_sql_result.rows[ib];
+                    for (const auto &key : keys) {
+                        int col_index = key.col_index;
+                        std::string va = (static_cast<size_t>(col_index) < ra.size()) ? ra[static_cast<size_t>(col_index)] : "";
+                        std::string vb = (static_cast<size_t>(col_index) < rb.size()) ? rb[static_cast<size_t>(col_index)] : "";
+                        if (va == vb) continue;
+                        double na = 0.0;
+                        double nb = 0.0;
+                        bool a_num = parse_number(va, na);
+                        bool b_num = parse_number(vb, nb);
+                        bool use_num = key.numeric || (a_num && b_num);
+                        if (use_num && a_num && b_num) {
+                            if (na == nb) continue;
+                            return key.asc ? (na < nb) : (na > nb);
+                        }
+                        return key.asc ? (va < vb) : (va > vb);
+                    }
+                    return false;
+                });
+                std::vector<std::vector<std::string>> sorted_rows;
+                sorted_rows.reserve(last_sql_result.rows.size());
+                for (size_t idx : order_idx) {
+                    sorted_rows.push_back(last_sql_result.rows[idx]);
+                }
+                last_sql_result.rows.swap(sorted_rows);
+                print_sql_result(last_sql_result, shell_format);
+                continue;
+            }
             if (line == "tables") {
                 for (size_t t = 0; t < world.table_names.size(); ++t) {
                     std::cout << t << ": " << world.table_names[t] << "\n";
@@ -940,11 +1128,28 @@ int main(int argc, char **argv) {
                 std::vector<int> counts(world.table_names.size(), 0);
                 for (const auto &p : world.payloads) {
                     if (p.table_id >= 0 && p.table_id < static_cast<int>(counts.size())) {
+                        int64_t key = db_payload_key(p.table_id, p.id);
+                        if (world.tombstones.find(key) != world.tombstones.end()) continue;
+                        if (!p.is_delta && world.delta_index_by_key.find(key) != world.delta_index_by_key.end()) continue;
                         counts[static_cast<size_t>(p.table_id)]++;
                     }
                 }
                 for (size_t t = 0; t < world.table_names.size(); ++t) {
                     std::cout << t << ": " << world.table_names[t] << " -> " << counts[t] << "\n";
+                }
+                continue;
+            }
+            if (line == "delta") {
+                std::cout << "delta=" << db_delta_count(world)
+                          << " tombstones=" << world.tombstones.size() << "\n";
+                continue;
+            }
+            if (line == "merge") {
+                std::string merge_error;
+                if (!db_merge_delta(world, merge_cfg, merge_error)) {
+                    std::cout << "merge_error: " << merge_error << "\n";
+                } else {
+                    std::cout << "merge_ok\n";
                 }
                 continue;
             }
@@ -962,6 +1167,9 @@ int main(int argc, char **argv) {
                 if (cols.empty()) {
                     for (const auto &p : world.payloads) {
                         if (p.table_id == table_id) {
+                            int64_t key = db_payload_key(p.table_id, p.id);
+                            if (world.tombstones.find(key) != world.tombstones.end()) continue;
+                            if (!p.is_delta && world.delta_index_by_key.find(key) != world.delta_index_by_key.end()) continue;
                             for (const auto &f : p.fields) {
                                 cols.push_back(f.name);
                             }
@@ -987,7 +1195,25 @@ int main(int argc, char **argv) {
                     std::cout << "SQL-Fehler: " << sql_error << "\n";
                     continue;
                 }
+                last_sql_result = result;
+                last_sql_original = result;
+                last_sql_valid = true;
                 print_sql_result(result, shell_format);
+                if (opts.db_merge_threshold > 0) {
+                    std::string lower_sql = sql;
+                    for (char &c : lower_sql) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    if (lower_sql.rfind("insert", 0) == 0 || lower_sql.rfind("update", 0) == 0 ||
+                        lower_sql.rfind("delete", 0) == 0) {
+                        if (db_delta_count(world) >= static_cast<size_t>(opts.db_merge_threshold)) {
+                            std::string merge_error;
+                            if (!db_merge_delta(world, merge_cfg, merge_error)) {
+                                std::cout << "merge_error: " << merge_error << "\n";
+                            } else {
+                                std::cout << "merge_ok\n";
+                            }
+                        }
+                    }
+                }
                 continue;
             }
             if (line.rfind("format ", 0) == 0) {
@@ -1115,6 +1341,39 @@ int main(int argc, char **argv) {
                 }
             }
 
+            auto equals_ci = [](const std::string &a, const std::string &b) {
+                return a.size() == b.size() &&
+                       std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+                           return std::tolower(static_cast<unsigned char>(x)) ==
+                                  std::tolower(static_cast<unsigned char>(y));
+                       });
+            };
+            DbSqlResult shortcut_result;
+            std::vector<std::string> shortcut_columns;
+            if (!show_list.empty()) {
+                shortcut_columns = show_list;
+            } else if (!table.empty()) {
+                int table_id = db_find_table(world, table);
+                if (table_id >= 0 && table_id < static_cast<int>(world.table_columns.size())) {
+                    shortcut_columns = world.table_columns[static_cast<size_t>(table_id)];
+                }
+                if (shortcut_columns.empty()) {
+                    for (const auto &p : world.payloads) {
+                        if (p.table_id == table_id) {
+                            for (const auto &f : p.fields) {
+                                shortcut_columns.push_back(f.name);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            if (shortcut_columns.empty()) {
+                shortcut_columns = {"data"};
+            }
+            shortcut_result.columns = shortcut_columns;
+            shortcut_result.rows.reserve(hits.size());
+
             for (int idx : hits) {
                 if (idx < 0 || idx >= static_cast<int>(world.payloads.size())) continue;
                 const DbPayload &p = world.payloads[static_cast<size_t>(idx)];
@@ -1125,12 +1384,7 @@ int main(int argc, char **argv) {
                     bool first = true;
                     for (const auto &sel : show_list) {
                         for (const auto &f : p.fields) {
-                            if (f.name == sel || (sel.size() == f.name.size() &&
-                                                  std::equal(sel.begin(), sel.end(), f.name.begin(),
-                                                             [](char a, char b) {
-                                                                 return std::tolower(static_cast<unsigned char>(a)) ==
-                                                                        std::tolower(static_cast<unsigned char>(b));
-                                                             }))) {
+                            if (f.name == sel || equals_ci(sel, f.name)) {
                                 if (!first) out_data += ", ";
                                 out_data += f.name + "=" + f.value;
                                 first = false;
@@ -1141,7 +1395,29 @@ int main(int argc, char **argv) {
                 }
                 std::cout << "id=" << p.id << " table=" << world.table_names[static_cast<size_t>(p.table_id)]
                           << " x=" << p.x << " y=" << p.y << " data=\"" << out_data << "\"\n";
+
+                std::vector<std::string> row;
+                if (shortcut_columns.size() == 1 && shortcut_columns[0] == "data") {
+                    row.push_back(p.raw_data);
+                } else {
+                    row.reserve(shortcut_columns.size());
+                    for (const auto &sel : shortcut_columns) {
+                        std::string value;
+                        for (const auto &f : p.fields) {
+                            if (f.name == sel || equals_ci(sel, f.name)) {
+                                value = f.value;
+                                break;
+                            }
+                        }
+                        row.push_back(value);
+                    }
+                }
+                shortcut_result.rows.push_back(std::move(row));
             }
+
+            last_sql_result = shortcut_result;
+            last_sql_original = shortcut_result;
+            last_sql_valid = !shortcut_result.rows.empty();
         }
         return 0;
     }

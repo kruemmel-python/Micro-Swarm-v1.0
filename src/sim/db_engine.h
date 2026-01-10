@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct DbField {
@@ -29,6 +30,7 @@ struct DbPayload {
     int x = -1;
     int y = -1;
     bool placed = false;
+    bool is_delta = false;
 };
 
 struct DbWorld {
@@ -43,6 +45,8 @@ struct DbWorld {
     MycelNetwork mycel;
     std::unordered_map<std::string, int> table_lookup;
     std::unordered_map<int64_t, std::pair<int, int>> payload_positions;
+    std::unordered_map<int64_t, int> delta_index_by_key;
+    std::unordered_set<int64_t> tombstones;
 };
 
 struct DbIngestConfig {
@@ -74,3 +78,11 @@ bool db_save_cluster_ppm(const std::string &path, const DbWorld &world, int scal
 bool db_parse_query(const std::string &query, DbQuery &out);
 std::vector<int> db_execute_query(const DbWorld &world, const DbQuery &q, int radius);
 std::vector<int> db_execute_query_focus(const DbWorld &world, const DbQuery &q, int center_x, int center_y, int radius);
+
+int64_t db_payload_key(int table_id, int id);
+size_t db_delta_count(const DbWorld &world);
+bool db_has_pending_delta(const DbWorld &world);
+bool db_merge_delta(DbWorld &world, const DbIngestConfig &cfg, std::string &error);
+bool db_apply_insert_sql(DbWorld &world, const std::string &stmt, int &rows, std::string &error);
+bool db_apply_update_sql(DbWorld &world, const std::string &stmt, int &rows, std::string &error);
+bool db_apply_delete_sql(DbWorld &world, const std::string &stmt, int &rows, std::string &error);

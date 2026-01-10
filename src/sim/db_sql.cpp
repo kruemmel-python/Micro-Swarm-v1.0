@@ -146,7 +146,7 @@ struct Expr {
 };
 
 struct SelectItem {
-    enum Kind { STAR, COLUMN, AGG } kind = COLUMN;
+    enum Kind { STAR, COLUMN, AGG, FUNC } kind = COLUMN;
     std::string table;
     std::string column;
     std::string func;
@@ -218,7 +218,7 @@ bool parse_select_list(Parser &p, std::vector<SelectItem> &out) {
                     item.func = lower;
                     item.column = arglist.empty() ? "*" : arglist;
                 } else {
-                    item.kind = SelectItem::COLUMN;
+                    item.kind = SelectItem::FUNC;
                     item.column = item.raw;
                 }
             } else {
@@ -585,6 +585,45 @@ struct Row {
     std::unordered_map<std::string, Cell> values;
 };
 
+std::vector<std::string> split_args(const std::string &s);
+
+struct AggSpec {
+    std::string raw;
+    std::string func;
+    std::string column;
+};
+
+bool parse_agg_spec(const std::string &raw, AggSpec &out) {
+    size_t open = raw.find('(');
+    size_t close = raw.rfind(')');
+    if (open == std::string::npos || close == std::string::npos || close <= open) {
+        return false;
+    }
+    std::string fname = to_lower(raw.substr(0, open));
+    if (fname != "count" && fname != "sum" && fname != "avg" && fname != "min" && fname != "max") {
+        return false;
+    }
+    std::string args_str = raw.substr(open + 1, close - open - 1);
+    std::vector<std::string> args = split_args(args_str);
+    out.raw = raw;
+    out.func = fname;
+    out.column = args.empty() ? "*" : args[0];
+    return true;
+}
+
+void collect_agg_specs(const Expr *expr, std::vector<AggSpec> &out) {
+    if (!expr) return;
+    if (expr->kind == Expr::VALUE) {
+        AggSpec spec;
+        if (parse_agg_spec(expr->value, spec)) {
+            out.push_back(spec);
+        }
+        return;
+    }
+    if (expr->lhs) collect_agg_specs(expr->lhs.get(), out);
+    if (expr->rhs) collect_agg_specs(expr->rhs.get(), out);
+}
+
 bool parse_number(const std::string &s, double &out) {
     try {
         size_t idx = 0;
@@ -771,7 +810,15 @@ Cell eval_value(const Expr *expr, const Row &row, const Row *outer) {
         if (!raw.empty() && (raw.front() == '\'' || raw.front() == '"')) {
             return make_cell(strip_quotes(raw), false);
         }
+        double num = 0.0;
+        if (parse_number(raw, num)) {
+            return make_cell(raw, false);
+        }
         if (raw.find('(') != std::string::npos && raw.back() == ')') {
+            Cell c = get_value(row, outer, raw);
+            if (!c.is_null) {
+                return c;
+            }
             return eval_function(raw, row, outer);
         }
         return get_value(row, outer, raw);
@@ -846,7 +893,7 @@ bool eval_expr(const Expr *expr,
             if (a.is_null) return false;
             DbSqlResult sub;
             std::string sub_error;
-            if (!exec_sql_with_outer(world, expr->subquery, use_focus, focus_x, focus_y, radius, outer, sub, sub_error)) {
+            if (!exec_sql_with_outer(world, expr->subquery, use_focus, focus_x, focus_y, radius, &row, sub, sub_error)) {
                 error = sub_error;
                 return false;
             }
@@ -879,7 +926,7 @@ bool eval_expr(const Expr *expr,
         case Expr::EXISTS: {
             DbSqlResult sub;
             std::string sub_error;
-            if (!exec_sql_with_outer(world, expr->subquery, use_focus, focus_x, focus_y, radius, outer, sub, sub_error)) {
+            if (!exec_sql_with_outer(world, expr->subquery, use_focus, focus_x, focus_y, radius, &row, sub, sub_error)) {
                 error = sub_error;
                 return false;
             }
@@ -971,7 +1018,12 @@ std::vector<Row> rows_for_table(const DbWorld &world,
     if (table_id < 0) return rows;
     for (const auto &p : world.payloads) {
         if (p.table_id != table_id) continue;
-        if (use_focus && !in_focus(p, focus_x, focus_y, radius)) continue;
+        int64_t key = db_payload_key(p.table_id, p.id);
+        if (world.tombstones.find(key) != world.tombstones.end()) continue;
+        if (!p.is_delta) {
+            if (world.delta_index_by_key.find(key) != world.delta_index_by_key.end()) continue;
+            if (use_focus && !in_focus(p, focus_x, focus_y, radius)) continue;
+        }
         rows.push_back(make_row_for_payload(world, p, alias));
     }
     return rows;
@@ -1025,6 +1077,14 @@ bool apply_order(const std::vector<std::pair<std::string, bool>> &order_by,
     for (const auto &ob : order_by) {
         std::string va = resolve_order_value(columns, a, meta_a, outer_a, ob.first);
         std::string vb = resolve_order_value(columns, b, meta_b, outer_b, ob.first);
+        double na = 0.0;
+        double nb = 0.0;
+        bool a_num = parse_number(va, na);
+        bool b_num = parse_number(vb, nb);
+        if (a_num && b_num) {
+            if (na == nb) continue;
+            return ob.second ? (na < nb) : (na > nb);
+        }
         if (va == vb) continue;
         if (ob.second) {
             return va < vb;
@@ -1194,12 +1254,36 @@ bool execute_single_sql(const DbWorld &world,
             const auto &grows = pair.second;
             Row agg_row;
             std::unordered_map<std::string, AggState> agg;
-
-            for (const auto &item : q.select_items) {
-                if (item.kind == SelectItem::AGG) {
-                    std::string key = item.raw;
-                    agg[key] = AggState{};
+            std::vector<AggSpec> agg_specs;
+            {
+                std::unordered_map<std::string, bool> seen;
+                for (const auto &item : q.select_items) {
+                    if (item.kind != SelectItem::AGG) continue;
+                    AggSpec spec;
+                    spec.raw = item.raw;
+                    spec.func = item.func;
+                    spec.column = item.column;
+                    std::string key = to_lower(spec.raw);
+                    if (!seen[key]) {
+                        seen[key] = true;
+                        agg_specs.push_back(spec);
+                    }
                 }
+                if (q.having_expr) {
+                    std::vector<AggSpec> having_specs;
+                    collect_agg_specs(q.having_expr.get(), having_specs);
+                    for (const auto &spec : having_specs) {
+                        std::string key = to_lower(spec.raw);
+                        if (!seen[key]) {
+                            seen[key] = true;
+                            agg_specs.push_back(spec);
+                        }
+                    }
+                }
+            }
+
+            for (const auto &spec : agg_specs) {
+                agg[spec.raw] = AggState{};
             }
             for (const auto &gb : group_cols) {
                 Cell c = get_cell_by_name(grows.front(), outer, gb);
@@ -1207,28 +1291,27 @@ bool execute_single_sql(const DbWorld &world,
             }
 
             for (const auto &row : grows) {
-                for (const auto &item : q.select_items) {
-                    if (item.kind != SelectItem::AGG) continue;
-                    AggState &state = agg[item.raw];
-                    if (ieq(item.func, "count")) {
-                        if (item.column == "*") {
+                for (const auto &spec : agg_specs) {
+                    AggState &state = agg[spec.raw];
+                    if (ieq(spec.func, "count")) {
+                        if (spec.column == "*") {
                             state.count++;
                         } else {
-                        Cell c = get_cell_by_name(row, outer, item.column);
+                            Cell c = get_cell_by_name(row, outer, spec.column);
                             if (!c.is_null) state.count++;
                         }
-                    } else if (ieq(item.func, "sum") || ieq(item.func, "avg")) {
-                        Cell c = get_cell_by_name(row, outer, item.column);
+                    } else if (ieq(spec.func, "sum") || ieq(spec.func, "avg")) {
+                        Cell c = get_cell_by_name(row, outer, spec.column);
                         if (c.has_number) {
                             state.sum += c.number;
                             state.count_num++;
                         }
-                    } else if (ieq(item.func, "min")) {
-                        Cell c = get_cell_by_name(row, outer, item.column);
+                    } else if (ieq(spec.func, "min")) {
+                        Cell c = get_cell_by_name(row, outer, spec.column);
                         update_minmax(state.min_val, c, true);
                         state.has_min = true;
-                    } else if (ieq(item.func, "max")) {
-                        Cell c = get_cell_by_name(row, outer, item.column);
+                    } else if (ieq(spec.func, "max")) {
+                        Cell c = get_cell_by_name(row, outer, spec.column);
                         update_minmax(state.max_val, c, false);
                         state.has_max = true;
                     }
@@ -1237,10 +1320,10 @@ bool execute_single_sql(const DbWorld &world,
 
             std::vector<std::string> out_row;
             out_row.reserve(q.select_items.size());
-            for (const auto &item : q.select_items) {
-                if (item.kind == SelectItem::AGG) {
-                    const AggState &state = agg[item.raw];
-                    if (ieq(item.func, "count")) {
+                for (const auto &item : q.select_items) {
+                    if (item.kind == SelectItem::AGG) {
+                        const AggState &state = agg[item.raw];
+                        if (ieq(item.func, "count")) {
                         out_row.push_back(std::to_string(state.count));
                         agg_row.values[to_lower(item.raw)] = make_cell(std::to_string(state.count), false);
                         if (!item.alias.empty()) {
@@ -1272,15 +1355,34 @@ bool execute_single_sql(const DbWorld &world,
                             agg_row.values[to_lower(item.alias)] = state.max_val;
                         }
                     }
-                } else {
-                    Cell c = get_cell_by_name(grows.front(), outer, item.column);
-                    out_row.push_back(c.is_null ? "" : c.text);
-                    agg_row.values[to_lower(item.column)] = c;
-                    if (!item.alias.empty()) {
-                        agg_row.values[to_lower(item.alias)] = c;
+                    } else {
+                        Cell c = (item.kind == SelectItem::FUNC)
+                                     ? eval_function(item.raw, grows.front(), outer)
+                                     : get_cell_by_name(grows.front(), outer, item.column);
+                        out_row.push_back(c.is_null ? "" : c.text);
+                        agg_row.values[to_lower(item.column)] = c;
+                        if (!item.alias.empty()) {
+                            agg_row.values[to_lower(item.alias)] = c;
+                        }
                     }
                 }
-            }
+                for (const auto &spec : agg_specs) {
+                    const AggState &state = agg[spec.raw];
+                    std::string key = to_lower(spec.raw);
+                    if (agg_row.values.find(key) != agg_row.values.end()) continue;
+                    if (ieq(spec.func, "count")) {
+                        agg_row.values[key] = make_cell(std::to_string(state.count), false);
+                    } else if (ieq(spec.func, "sum")) {
+                        agg_row.values[key] = make_cell(std::to_string(state.sum), false);
+                    } else if (ieq(spec.func, "avg")) {
+                        double avg = (state.count_num > 0) ? (state.sum / static_cast<double>(state.count_num)) : 0.0;
+                        agg_row.values[key] = make_cell(std::to_string(avg), false);
+                    } else if (ieq(spec.func, "min")) {
+                        agg_row.values[key] = state.min_val;
+                    } else if (ieq(spec.func, "max")) {
+                        agg_row.values[key] = state.max_val;
+                    }
+                }
             if (q.having_expr && !eval_expr(q.having_expr.get(), agg_row, outer, world, use_focus, focus_x, focus_y, radius, error)) {
                 if (!error.empty()) {
                     return false;
@@ -1328,7 +1430,9 @@ bool execute_single_sql(const DbWorld &world,
                         error = "Aggregates ohne GROUP BY nicht erlaubt.";
                         return false;
                     }
-                    Cell c = get_cell_by_name(row, outer, item.column);
+                    Cell c = (item.kind == SelectItem::FUNC)
+                                 ? eval_function(item.raw, row, outer)
+                                 : get_cell_by_name(row, outer, item.column);
                     out_row.push_back(c.is_null ? "" : c.text);
                 }
             }
@@ -1553,7 +1657,7 @@ bool exec_sql_with_outer(const DbWorld &world,
 
 } // namespace
 
-bool db_execute_sql(const DbWorld &world,
+bool db_execute_sql(DbWorld &world,
                     const std::string &sql,
                     bool use_focus,
                     int focus_x,
@@ -1561,5 +1665,32 @@ bool db_execute_sql(const DbWorld &world,
                     int radius,
                     DbSqlResult &out,
                     std::string &error) {
+    auto lower_copy = [](std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return s;
+    };
+    std::string trimmed = sql;
+    trimmed.erase(trimmed.begin(),
+                  std::find_if(trimmed.begin(), trimmed.end(), [](unsigned char c) { return !std::isspace(c); }));
+    std::string lower = lower_copy(trimmed);
+    int rows = 0;
+    if (lower.rfind("insert", 0) == 0) {
+        if (!db_apply_insert_sql(world, sql, rows, error)) return false;
+        out.columns = {"rows_affected"};
+        out.rows = {{std::to_string(rows)}};
+        return true;
+    }
+    if (lower.rfind("update", 0) == 0) {
+        if (!db_apply_update_sql(world, sql, rows, error)) return false;
+        out.columns = {"rows_affected"};
+        out.rows = {{std::to_string(rows)}};
+        return true;
+    }
+    if (lower.rfind("delete", 0) == 0) {
+        if (!db_apply_delete_sql(world, sql, rows, error)) return false;
+        out.columns = {"rows_affected"};
+        out.rows = {{std::to_string(rows)}};
+        return true;
+    }
     return exec_sql_with_outer(world, sql, use_focus, focus_x, focus_y, radius, nullptr, out, error);
 }

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -117,6 +118,95 @@ bool ends_with_id(const std::string &name) {
     if (lower.size() >= 2 && lower.substr(lower.size() - 2) == "id") return true;
     return false;
 }
+
+bool is_pk_column(const std::string &column, const std::string &table) {
+    std::string col = to_lower(column);
+    std::string tbl = to_lower(table);
+    return col == "id" || col == tbl + "id" || col == tbl + "_id";
+}
+
+std::string strip_table_prefix(const std::string &column) {
+    size_t dot = column.find('.');
+    if (dot == std::string::npos) return column;
+    return column.substr(dot + 1);
+}
+
+struct Token {
+    std::string text;
+};
+
+std::vector<Token> tokenize_sql(const std::string &sql) {
+    std::vector<Token> out;
+    std::string cur;
+    auto flush = [&]() {
+        if (!cur.empty()) {
+            out.push_back({cur});
+            cur.clear();
+        }
+    };
+    for (size_t i = 0; i < sql.size(); ++i) {
+        char c = sql[i];
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            flush();
+            continue;
+        }
+        if (c == '\'' || c == '"') {
+            flush();
+            char q = c;
+            std::string val;
+            i++;
+            while (i < sql.size()) {
+                char x = sql[i];
+                if (x == q) {
+                    if (i + 1 < sql.size() && sql[i + 1] == q) {
+                        val.push_back(q);
+                        i += 2;
+                        continue;
+                    }
+                    break;
+                }
+                val.push_back(x);
+                i++;
+            }
+            out.push_back({std::string(1, q) + val + std::string(1, q)});
+            continue;
+        }
+        if (std::strchr("(),=*", c)) {
+            flush();
+            out.push_back({std::string(1, c)});
+            continue;
+        }
+        cur.push_back(c);
+    }
+    flush();
+    return out;
+}
+
+struct Parser {
+    std::vector<Token> tokens;
+    size_t pos = 0;
+
+    bool eof() const { return pos >= tokens.size(); }
+    const std::string &peek() const { static std::string empty; return eof() ? empty : tokens[pos].text; }
+    bool match(const char *kw) {
+        if (!eof() && ieq(tokens[pos].text, kw)) {
+            pos++;
+            return true;
+        }
+        return false;
+    }
+    bool match_symbol(const char *sym) {
+        if (!eof() && tokens[pos].text == sym) {
+            pos++;
+            return true;
+        }
+        return false;
+    }
+    std::string consume() {
+        if (eof()) return "";
+        return tokens[pos++].text;
+    }
+};
 
 std::string fk_table_from_column(const std::string &name) {
     std::string lower = to_lower(name);
@@ -401,6 +491,201 @@ bool match_field(const DbPayload &payload, const std::string &name, const std::s
     }
     return false;
 }
+
+bool payload_tombstoned(const DbWorld &world, int64_t key) {
+    return world.tombstones.find(key) != world.tombstones.end();
+}
+
+bool base_overridden(const DbWorld &world, int64_t key) {
+    return world.delta_index_by_key.find(key) != world.delta_index_by_key.end();
+}
+
+int next_payload_id(const DbWorld &world, int table_id) {
+    int max_id = 0;
+    for (const auto &p : world.payloads) {
+        if (p.table_id == table_id) {
+            if (p.id > max_id) max_id = p.id;
+        }
+    }
+    return max_id + 1;
+}
+
+void ensure_column(DbWorld &world, int table_id, const std::string &col) {
+    if (table_id < 0) return;
+    if (table_id >= static_cast<int>(world.table_columns.size())) return;
+    auto &cols = world.table_columns[static_cast<size_t>(table_id)];
+    for (const auto &c : cols) {
+        if (ieq(c, col)) {
+            return;
+        }
+    }
+    cols.push_back(col);
+}
+
+void rebuild_foreign_keys(DbWorld &world, DbPayload &payload) {
+    payload.foreign_keys.clear();
+    for (const auto &f : payload.fields) {
+        if (!ends_with_id(f.name)) continue;
+        int fk_id = 0;
+        if (!parse_int_value(f.value, fk_id)) continue;
+        std::string fk_table = fk_table_from_column(f.name);
+        int fk_table_id = db_add_table(world, fk_table);
+        DbForeignKey fk;
+        fk.table_id = fk_table_id;
+        fk.id = fk_id;
+        fk.column = f.name;
+        payload.foreign_keys.push_back(fk);
+    }
+}
+
+bool apply_set_fields(DbWorld &world,
+                      DbPayload &payload,
+                      const std::vector<std::pair<std::string, std::string>> &sets,
+                      const std::string &table,
+                      std::string &error) {
+    for (const auto &pair : sets) {
+        std::string col = strip_table_prefix(pair.first);
+        if (is_pk_column(col, table)) {
+            error = "UPDATE auf Primary Key ist nicht unterstuetzt.";
+            return false;
+        }
+    }
+    for (const auto &pair : sets) {
+        std::string col = strip_table_prefix(pair.first);
+        std::string val = strip_quotes(pair.second);
+        bool updated = false;
+        for (auto &f : payload.fields) {
+            if (ieq(f.name, col)) {
+                f.value = val;
+                updated = true;
+                break;
+            }
+        }
+        if (!updated) {
+            DbField f;
+            f.name = col;
+            f.value = val;
+            payload.fields.push_back(std::move(f));
+        }
+        ensure_column(world, payload.table_id, col);
+    }
+    rebuild_foreign_keys(world, payload);
+    payload.raw_data = build_raw_data(payload.fields);
+    return true;
+}
+
+bool build_payload_from_row(DbWorld &world,
+                            const std::string &table,
+                            const std::vector<std::string> &columns,
+                            const std::vector<std::string> &row,
+                            DbPayload &out,
+                            std::string &error) {
+    int table_id = db_add_table(world, table);
+    if (!columns.empty() && row.size() != columns.size()) {
+        error = "INSERT: Spaltenanzahl passt nicht.";
+        return false;
+    }
+    std::vector<std::string> use_cols = columns;
+    if (use_cols.empty()) {
+        if (table_id >= 0 && table_id < static_cast<int>(world.table_columns.size()) &&
+            !world.table_columns[static_cast<size_t>(table_id)].empty()) {
+            use_cols = world.table_columns[static_cast<size_t>(table_id)];
+        } else {
+            use_cols.clear();
+            for (size_t i = 0; i < row.size(); ++i) {
+                use_cols.push_back("col" + std::to_string(i));
+            }
+        }
+    }
+    if (row.size() != use_cols.size()) {
+        error = "INSERT: Werteanzahl passt nicht.";
+        return false;
+    }
+    out = DbPayload{};
+    out.table_id = table_id;
+    out.is_delta = true;
+    out.placed = false;
+    out.x = -1;
+    out.y = -1;
+    out.fields.clear();
+    for (size_t ci = 0; ci < use_cols.size(); ++ci) {
+        DbField field;
+        field.name = use_cols[ci];
+        field.value = strip_quotes(row[ci]);
+        out.fields.push_back(field);
+        ensure_column(world, table_id, field.name);
+    }
+    int id_value = 0;
+    bool found_id = false;
+    for (const auto &f : out.fields) {
+        if (ieq(f.name, "id") || is_pk_column(f.name, table)) {
+            if (parse_int_value(f.value, id_value)) {
+                found_id = true;
+            }
+            break;
+        }
+    }
+    if (!found_id && !out.fields.empty()) {
+        found_id = parse_int_value(out.fields.front().value, id_value);
+    }
+    if (!found_id) {
+        id_value = next_payload_id(world, table_id);
+    }
+    out.id = id_value;
+    rebuild_foreign_keys(world, out);
+    out.raw_data = build_raw_data(out.fields);
+    return true;
+}
+
+bool parse_update_statement(const std::string &stmt,
+                            std::string &table,
+                            std::vector<std::pair<std::string, std::string>> &sets,
+                            std::string &where_col,
+                            std::string &where_val) {
+    Parser p;
+    p.tokens = tokenize_sql(stmt);
+    if (!p.match("update")) return false;
+    table = p.consume();
+    if (table.empty()) return false;
+    if (!p.match("set")) return false;
+    sets.clear();
+    while (!p.eof() && !ieq(p.peek(), "where")) {
+        std::string col = p.consume();
+        if (col.empty()) return false;
+        if (!p.match_symbol("=")) return false;
+        std::string val = p.consume();
+        if (val.empty()) return false;
+        sets.push_back({col, val});
+        if (p.match_symbol(",")) continue;
+        if (ieq(p.peek(), "where")) break;
+    }
+    if (!p.match("where")) return false;
+    where_col = p.consume();
+    if (where_col.empty()) return false;
+    if (!p.match_symbol("=")) return false;
+    where_val = p.consume();
+    return !where_val.empty() && !sets.empty();
+}
+
+bool parse_delete_statement(const std::string &stmt,
+                            std::string &table,
+                            std::string &where_col,
+                            std::string &where_val) {
+    Parser p;
+    p.tokens = tokenize_sql(stmt);
+    if (!p.match("delete")) return false;
+    if (p.match("from")) {
+        // ok
+    }
+    table = p.consume();
+    if (table.empty()) return false;
+    if (!p.match("where")) return false;
+    where_col = p.consume();
+    if (where_col.empty()) return false;
+    if (!p.match_symbol("=")) return false;
+    where_val = p.consume();
+    return !where_val.empty();
+}
 } // namespace
 
 int db_add_table(DbWorld &world, const std::string &name) {
@@ -417,6 +702,24 @@ int db_add_table(DbWorld &world, const std::string &name) {
         world.table_pheromones.emplace_back(world.width, world.height, 0.0f);
     }
     return id;
+}
+
+int64_t db_payload_key(int table_id, int id) {
+    return make_payload_key(table_id, id);
+}
+
+size_t db_delta_count(const DbWorld &world) {
+    size_t count = 0;
+    for (const auto &pair : world.delta_index_by_key) {
+        if (world.tombstones.find(pair.first) == world.tombstones.end()) {
+            count++;
+        }
+    }
+    return count;
+}
+
+bool db_has_pending_delta(const DbWorld &world) {
+    return !world.tombstones.empty() || !world.delta_index_by_key.empty();
 }
 
 int db_find_table(const DbWorld &world, const std::string &name) {
@@ -748,6 +1051,10 @@ bool db_run_ingest(DbWorld &world, const DbIngestConfig &cfg, std::string &error
 }
 
 bool db_save_myco(const std::string &path, const DbWorld &world, std::string &error) {
+    if (db_has_pending_delta(world)) {
+        error = "Delta-Writes ausstehend: bitte merge ausfuehren, bevor gespeichert wird.";
+        return false;
+    }
     std::ofstream out(path);
     if (!out.is_open()) {
         error = "MYCO-Datei konnte nicht geschrieben werden: " + path;
@@ -1011,6 +1318,7 @@ std::vector<int> db_execute_query(const DbWorld &world, const DbQuery &q, int ra
     if (table_id < 0) {
         return out;
     }
+    std::string where_col = strip_table_prefix(q.column);
     bool fk_query = ends_with_id(q.column);
     int target_id = 0;
     if (fk_query && !parse_int_value(q.value, target_id)) {
@@ -1022,6 +1330,29 @@ std::vector<int> db_execute_query(const DbWorld &world, const DbQuery &q, int ra
         std::string table_lower = to_lower(q.table);
         if (col_lower == "id" || col_lower == table_lower + "id" || col_lower == table_lower + "_id") {
             pk_query = true;
+        }
+    }
+    if (pk_query) {
+        int64_t key = make_payload_key(table_id, target_id);
+        auto dit = world.delta_index_by_key.find(key);
+        if (dit != world.delta_index_by_key.end() && !payload_tombstoned(world, key)) {
+            out.push_back(dit->second);
+            return out;
+        }
+    }
+    std::vector<int> base_hits;
+    for (size_t i = 0; i < world.payloads.size(); ++i) {
+        const DbPayload &p = world.payloads[i];
+        if (!p.is_delta) continue;
+        if (p.table_id != table_id) continue;
+        int64_t key = make_payload_key(p.table_id, p.id);
+        if (payload_tombstoned(world, key)) continue;
+        if (pk_query && p.id == target_id) {
+            out.push_back(static_cast<int>(i));
+            continue;
+        }
+        if (match_field(p, where_col, q.value)) {
+            out.push_back(static_cast<int>(i));
         }
     }
     if (fk_query) {
@@ -1043,6 +1374,9 @@ std::vector<int> db_execute_query(const DbWorld &world, const DbQuery &q, int ra
                         if (idx < 0) continue;
                         const DbPayload &p = world.payloads[static_cast<size_t>(idx)];
                         if (p.table_id != table_id) continue;
+                        if (p.is_delta) continue;
+                        int64_t pkey = make_payload_key(p.table_id, p.id);
+                        if (payload_tombstoned(world, pkey) || base_overridden(world, pkey)) continue;
                         for (const auto &fk : p.foreign_keys) {
                             if (fk.table_id == parent_id && fk.id == target_id) {
                                 out.push_back(idx);
@@ -1051,20 +1385,20 @@ std::vector<int> db_execute_query(const DbWorld &world, const DbQuery &q, int ra
                         }
                     }
                 }
-                if (!out.empty()) {
-                    return out;
-                }
             }
         }
     }
     for (size_t i = 0; i < world.payloads.size(); ++i) {
         const DbPayload &p = world.payloads[i];
+        if (p.is_delta) continue;
         if (p.table_id != table_id) continue;
+        int64_t key = make_payload_key(p.table_id, p.id);
+        if (payload_tombstoned(world, key) || base_overridden(world, key)) continue;
         if (pk_query && p.id == target_id) {
             out.push_back(static_cast<int>(i));
             continue;
         }
-        if (match_field(p, q.column, q.value)) {
+        if (match_field(p, where_col, q.value)) {
             out.push_back(static_cast<int>(i));
         }
     }
@@ -1082,6 +1416,7 @@ std::vector<int> db_execute_query_focus(const DbWorld &world, const DbQuery &q, 
     int y0 = std::max(0, center_y - radius);
     int y1 = std::min(world.height - 1, center_y + radius);
 
+    std::string where_col = strip_table_prefix(q.column);
     bool fk_query = ends_with_id(q.column);
     int target_id = 0;
     if (fk_query && !parse_int_value(q.value, target_id)) {
@@ -1101,12 +1436,47 @@ std::vector<int> db_execute_query_focus(const DbWorld &world, const DbQuery &q, 
         fk_table_id = db_find_table(world, parent_table);
     }
 
+    if (pk_query) {
+        int64_t key = make_payload_key(table_id, target_id);
+        auto dit = world.delta_index_by_key.find(key);
+        if (dit != world.delta_index_by_key.end() && !payload_tombstoned(world, key)) {
+            out.push_back(dit->second);
+            return out;
+        }
+    }
+    for (size_t i = 0; i < world.payloads.size(); ++i) {
+        const DbPayload &p = world.payloads[i];
+        if (!p.is_delta) continue;
+        if (p.table_id != table_id) continue;
+        int64_t key = make_payload_key(p.table_id, p.id);
+        if (payload_tombstoned(world, key)) continue;
+        if (pk_query && p.id == target_id) {
+            out.push_back(static_cast<int>(i));
+            continue;
+        }
+        if (fk_query && fk_table_id >= 0) {
+            for (const auto &fk : p.foreign_keys) {
+                if (fk.table_id == fk_table_id && fk.id == target_id) {
+                    out.push_back(static_cast<int>(i));
+                    break;
+                }
+            }
+            continue;
+        }
+        if (match_field(p, where_col, q.value)) {
+            out.push_back(static_cast<int>(i));
+        }
+    }
+
     for (int y = y0; y <= y1; ++y) {
         for (int x = x0; x <= x1; ++x) {
             int idx = world.cell_payload[static_cast<size_t>(y) * world.width + x];
             if (idx < 0 || idx >= static_cast<int>(world.payloads.size())) continue;
             const DbPayload &p = world.payloads[static_cast<size_t>(idx)];
             if (p.table_id != table_id) continue;
+            if (p.is_delta) continue;
+            int64_t key = make_payload_key(p.table_id, p.id);
+            if (payload_tombstoned(world, key) || base_overridden(world, key)) continue;
             if (pk_query && p.id == target_id) {
                 out.push_back(idx);
                 continue;
@@ -1120,12 +1490,184 @@ std::vector<int> db_execute_query_focus(const DbWorld &world, const DbQuery &q, 
                 }
                 continue;
             }
-            if (match_field(p, q.column, q.value)) {
+            if (match_field(p, where_col, q.value)) {
                 out.push_back(idx);
             }
         }
     }
     return out;
+}
+
+bool db_apply_insert_sql(DbWorld &world, const std::string &stmt, int &rows, std::string &error) {
+    rows = 0;
+    SqlInsert insert;
+    if (!parse_insert_statement(stmt, insert)) {
+        error = "INSERT: ungueltiges Statement.";
+        return false;
+    }
+    for (const auto &row : insert.rows) {
+        DbPayload payload;
+        if (!build_payload_from_row(world, insert.table, insert.columns, row, payload, error)) {
+            return false;
+        }
+        int64_t key = make_payload_key(payload.table_id, payload.id);
+        payload.is_delta = true;
+        payload.placed = false;
+        payload.x = -1;
+        payload.y = -1;
+        world.tombstones.erase(key);
+        auto it = world.delta_index_by_key.find(key);
+        if (it != world.delta_index_by_key.end()) {
+            world.payloads[static_cast<size_t>(it->second)] = std::move(payload);
+        } else {
+            int idx = static_cast<int>(world.payloads.size());
+            world.payloads.push_back(std::move(payload));
+            world.delta_index_by_key[key] = idx;
+        }
+        rows++;
+    }
+    return true;
+}
+
+bool db_apply_update_sql(DbWorld &world, const std::string &stmt, int &rows, std::string &error) {
+    rows = 0;
+    std::string table;
+    std::vector<std::pair<std::string, std::string>> sets;
+    std::string where_col;
+    std::string where_val;
+    if (!parse_update_statement(stmt, table, sets, where_col, where_val)) {
+        error = "UPDATE: ungueltiges Statement.";
+        return false;
+    }
+    where_col = strip_table_prefix(where_col);
+    where_val = strip_quotes(where_val);
+    int table_id = db_find_table(world, table);
+    if (table_id < 0) {
+        error = "UPDATE: Tabelle nicht gefunden.";
+        return false;
+    }
+    bool pk_query = is_pk_column(where_col, table);
+    int target_id = 0;
+    if (pk_query && !parse_int_value(where_val, target_id)) {
+        pk_query = false;
+    }
+    for (size_t i = 0; i < world.payloads.size(); ++i) {
+        DbPayload &p = world.payloads[i];
+        if (!p.is_delta) continue;
+        if (p.table_id != table_id) continue;
+        int64_t key = make_payload_key(p.table_id, p.id);
+        if (payload_tombstoned(world, key)) continue;
+        bool match = pk_query ? (p.id == target_id) : match_field(p, where_col, where_val);
+        if (!match) continue;
+        if (!apply_set_fields(world, p, sets, table, error)) {
+            return false;
+        }
+        rows++;
+    }
+    std::vector<int> base_hits;
+    for (size_t i = 0; i < world.payloads.size(); ++i) {
+        const DbPayload &p = world.payloads[i];
+        if (p.is_delta) continue;
+        if (p.table_id != table_id) continue;
+        int64_t key = make_payload_key(p.table_id, p.id);
+        if (payload_tombstoned(world, key) || base_overridden(world, key)) continue;
+        bool match = pk_query ? (p.id == target_id) : match_field(p, where_col, where_val);
+        if (!match) continue;
+        base_hits.push_back(static_cast<int>(i));
+    }
+    for (int idx : base_hits) {
+        const DbPayload &p = world.payloads[static_cast<size_t>(idx)];
+        int64_t key = make_payload_key(p.table_id, p.id);
+        DbPayload updated = p;
+        updated.is_delta = true;
+        updated.placed = false;
+        updated.x = -1;
+        updated.y = -1;
+        if (!apply_set_fields(world, updated, sets, table, error)) {
+            return false;
+        }
+        auto it = world.delta_index_by_key.find(key);
+        if (it != world.delta_index_by_key.end()) {
+            world.payloads[static_cast<size_t>(it->second)] = std::move(updated);
+        } else {
+            int idx = static_cast<int>(world.payloads.size());
+            world.payloads.push_back(std::move(updated));
+            world.delta_index_by_key[key] = idx;
+        }
+        rows++;
+    }
+    return true;
+}
+
+bool db_apply_delete_sql(DbWorld &world, const std::string &stmt, int &rows, std::string &error) {
+    rows = 0;
+    std::string table;
+    std::string where_col;
+    std::string where_val;
+    if (!parse_delete_statement(stmt, table, where_col, where_val)) {
+        error = "DELETE: ungueltiges Statement.";
+        return false;
+    }
+    where_col = strip_table_prefix(where_col);
+    where_val = strip_quotes(where_val);
+    int table_id = db_find_table(world, table);
+    if (table_id < 0) {
+        error = "DELETE: Tabelle nicht gefunden.";
+        return false;
+    }
+    bool pk_query = is_pk_column(where_col, table);
+    int target_id = 0;
+    if (pk_query && !parse_int_value(where_val, target_id)) {
+        pk_query = false;
+    }
+    for (size_t i = 0; i < world.payloads.size(); ++i) {
+        const DbPayload &p = world.payloads[i];
+        if (p.table_id != table_id) continue;
+        int64_t key = make_payload_key(p.table_id, p.id);
+        if (payload_tombstoned(world, key)) continue;
+        if (!p.is_delta && base_overridden(world, key)) continue;
+        bool match = pk_query ? (p.id == target_id) : match_field(p, where_col, where_val);
+        if (!match) continue;
+        world.tombstones.insert(key);
+        rows++;
+    }
+    return true;
+}
+
+bool db_merge_delta(DbWorld &world, const DbIngestConfig &cfg, std::string &error) {
+    if (!db_has_pending_delta(world)) {
+        return true;
+    }
+    if (cfg.agent_count <= 0 || cfg.steps <= 0) {
+        error = "Merge-Config ungueltig (agents/steps).";
+        return false;
+    }
+    std::unordered_set<int64_t> delta_keys;
+    delta_keys.reserve(world.delta_index_by_key.size());
+    for (const auto &pair : world.delta_index_by_key) {
+        delta_keys.insert(pair.first);
+    }
+    std::vector<DbPayload> merged;
+    merged.reserve(world.payloads.size());
+    for (const auto &p : world.payloads) {
+        int64_t key = make_payload_key(p.table_id, p.id);
+        if (payload_tombstoned(world, key)) continue;
+        if (!p.is_delta) {
+            if (delta_keys.find(key) != delta_keys.end()) continue;
+            merged.push_back(p);
+            continue;
+        }
+        DbPayload copy = p;
+        copy.is_delta = false;
+        copy.placed = false;
+        copy.x = -1;
+        copy.y = -1;
+        merged.push_back(std::move(copy));
+    }
+    world.payloads.swap(merged);
+    world.delta_index_by_key.clear();
+    world.tombstones.clear();
+    return db_run_ingest(world, cfg, error);
 }
 
 bool db_save_cluster_ppm(const std::string &path, const DbWorld &world, int scale, std::string &error) {

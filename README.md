@@ -1,6 +1,3 @@
-
-<img width="1024" height="1024" alt="ms2" src="https://github.com/user-attachments/assets/fe9f85ed-b8dc-46fc-8a8f-07ff6445e7fa" />
-
 # Micro-Swarm  
 **Biologisch inspiriertes, agentenbasiertes Schwarm- und Gedächtnissystem (C++17)**
 
@@ -128,6 +125,10 @@ if(Test-Path build){
 --db PATH          MYCO-Input fuer db_query
 --query TEXT       Query fuer db_query
 --db-radius N      Radius fuer db_query (Default 5)
+--db-merge-agents N    Agentenanzahl fuer Merge (Default 256)
+--db-merge-steps N     Schritte fuer Merge (Default 2000)
+--db-merge-seed N      Seed fuer Merge (Default 42)
+--db-merge-threshold N Auto-Merge ab Delta-Size N (0=aus)
 --sql-format F     Output-Format fuer SQL (table|csv|json)
 --width N          (Alias: --wight)
 --height N         (Alias: --hight)
@@ -186,6 +187,12 @@ Die Query nutzt zuerst die raeumliche Naehe um das Parent-Cluster, faellt sonst 
 
 Die Chinook-Referenz definiert den vollständigen MycoDB-SQL-Dialekt.
 
+Write-Pfad (Delta-Store):
+- INSERT/UPDATE/DELETE schreiben in den Delta-Store (Merge on read).
+- `delta` zeigt ausstehende Writes/Tombstones.
+- `merge` re-clustert und schreibt den Delta-Store dauerhaft ein.
+- Optional: `--db-merge-threshold N` fuer Auto-Merge ab Delta-Size N.
+
 Beispiele:
 
 ```
@@ -199,26 +206,44 @@ schema Track
 Track AlbumId=1 show TrackId,Name,Milliseconds
 TrackId=13
 format csv
-sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId LIMIT 5
 ```
 
-SQL (Shell):
+SQL-Light (Shell):
 ```
-sql SELECT AlbumId, COUNT(*) AS C FROM Track WHERE AlbumId BETWEEN 1 AND 5 GROUP BY AlbumId HAVING C > 5 ORDER BY C DESC
-sql SELECT Name FROM Artist WHERE Name LIKE 'A%' ORDER BY ArtistId
-sql SELECT TrackId FROM Track WHERE AlbumId=1 UNION SELECT TrackId FROM Track WHERE AlbumId=2
-sql SELECT TrackId FROM Track WHERE AlbumId=1 UNION ALL SELECT TrackId FROM Track WHERE AlbumId=1
-sql SELECT t.Name, a.Title FROM Track t RIGHT JOIN Album a ON t.AlbumId=a.AlbumId WHERE a.AlbumId=1
-sql SELECT * FROM Track CROSS JOIN MediaType LIMIT 3
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1
+sql SELECT TrackId,Name FROM Track WHERE TrackId=1
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 AND GenreId=1
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 OR AlbumId=2
+sql SELECT TrackId,Name FROM Track WHERE NOT GenreId=1
+sql SELECT Name FROM Artist WHERE ArtistId IN (1,2,3,4)
+sql SELECT TrackId,Name FROM Track WHERE Milliseconds BETWEEN 200000 AND 300000
+sql SELECT Name FROM Artist WHERE Name LIKE 'A%'
 sql SELECT Name FROM Artist WHERE Name REGEXP '^A'
-sql SELECT Name FROM Artist WHERE ArtistId IN (SELECT ArtistId FROM Album WHERE AlbumId=1)
-sql SELECT Name FROM Artist WHERE EXISTS (SELECT AlbumId FROM Album WHERE AlbumId=1)
-sql SELECT Name FROM Artist a WHERE EXISTS (SELECT AlbumId FROM Album WHERE Album.ArtistId=a.ArtistId)
+sql SELECT Name FROM Artist WHERE Name IS NOT NULL LIMIT 5
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId
+sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId DESC LIMIT 5
+sql SELECT TrackId,Name FROM Track ORDER BY TrackId LIMIT 5 OFFSET 5
+sql SELECT TrackId,Name FROM Track ORDER BY 1 LIMIT 5
+sql SELECT DISTINCT GenreId FROM Track ORDER BY GenreId LIMIT 10
+sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING C > 5 ORDER BY C DESC LIMIT 10
+sql SELECT GenreId, AVG(Milliseconds) AS AvgMs FROM Track GROUP BY GenreId ORDER BY AvgMs DESC LIMIT 5
+sql SELECT AlbumId, SUM(Milliseconds) AS SumMs FROM Track GROUP BY AlbumId ORDER BY SumMs DESC LIMIT 5
+sql SELECT AlbumId, MIN(Milliseconds) AS MinMs, MAX(Milliseconds) AS MaxMs FROM Track GROUP BY AlbumId LIMIT 5
+sql SELECT t.Name, a.Title FROM Track t JOIN Album a ON t.AlbumId=a.AlbumId WHERE t.TrackId=13
+sql SELECT t.Name, a.Title FROM Track t LEFT JOIN Album a ON t.AlbumId=a.AlbumId WHERE a.AlbumId=1
+sql SELECT t.Name, a.Title FROM Track t RIGHT JOIN Album a ON t.AlbumId=a.AlbumId WHERE a.AlbumId=1
+sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING COUNT(*) > 5 ORDER BY C DESC LIMIT 5
 sql SELECT LOWER(Name) AS n FROM Artist ORDER BY n LIMIT 5
-sql SELECT TrackId, Name FROM Track ORDER BY 1 LIMIT 5
-sql SELECT Name FROM Artist WHERE Name IS NOT NULL LIMIT 3
-sql SELECT * FROM (SELECT ArtistId, Name FROM Artist) a WHERE a.ArtistId=1
+sql SELECT UPPER(Name) AS n FROM Artist ORDER BY n LIMIT 5
+sql SELECT LENGTH(Name) AS L FROM Artist ORDER BY L DESC LIMIT 5
+sql SELECT SUBSTRING(Name,1,5) AS S FROM Artist ORDER BY S LIMIT 5
+sql SELECT CONCAT(FirstName,' ',LastName) AS FullName FROM employee ORDER BY FullName LIMIT 5
+sql SELECT Name FROM Artist a WHERE EXISTS (SELECT AlbumId FROM Album WHERE Album.ArtistId=a.ArtistId)
+sql SELECT * FROM Track CROSS JOIN MediaType LIMIT 3
 sql WITH top_albums AS (SELECT AlbumId FROM Track GROUP BY AlbumId HAVING COUNT(*) > 5) SELECT AlbumId FROM top_albums ORDER BY AlbumId
+sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING COUNT(*) > 5 ORDER BY C DESC LIMIT 5
+sql SELECT * FROM (SELECT ArtistId, Name FROM Artist) a WHERE a.ArtistId=1
+sql SELECT TrackId,Name,Milliseconds FROM Track WHERE AlbumId=1
 ```
 
 `goto` setzt einen Fokuspunkt. Alle folgenden Anfragen nutzen den Fokus als Zentrum fuer den Radius.
