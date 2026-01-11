@@ -18,7 +18,7 @@ extern "C" {
 
 #define MS_API_VERSION_MAJOR 1
 #define MS_API_VERSION_MINOR 3
-#define MS_API_VERSION_PATCH 0
+#define MS_API_VERSION_PATCH 2
 
 typedef struct ms_handle_t ms_handle_t;
 typedef struct ms_db_handle_t ms_db_handle_t;
@@ -204,6 +204,17 @@ MICRO_SWARM_API int ms_db_load_myco(ms_db_handle_t *h, const char *path);
 MICRO_SWARM_API int ms_db_save_cluster_ppm(ms_db_handle_t *h, const char *path, int scale);
 
 MICRO_SWARM_API int ms_db_query_sql(ms_db_handle_t *h, const char *query, int radius);
+MICRO_SWARM_API int ms_db_sql_exec(ms_db_handle_t *h, const char *query, int use_focus, int focus_x, int focus_y, int radius);
+MICRO_SWARM_API int ms_db_sql_get_column_count(ms_db_handle_t *h);
+MICRO_SWARM_API int ms_db_sql_get_column_name(ms_db_handle_t *h, int index, char *dst, int dst_size);
+MICRO_SWARM_API int ms_db_sql_get_row_count(ms_db_handle_t *h);
+MICRO_SWARM_API int ms_db_sql_get_cell(ms_db_handle_t *h, int row, int col, char *dst, int dst_size);
+MICRO_SWARM_API int ms_db_merge_delta(ms_db_handle_t *h, int agents, int steps, uint32_t seed);
+MICRO_SWARM_API int ms_db_undo_last_delta(ms_db_handle_t *h);
+MICRO_SWARM_API int ms_db_get_delta_count(ms_db_handle_t *h);
+MICRO_SWARM_API int ms_db_get_tombstone_count(ms_db_handle_t *h);
+MICRO_SWARM_API int ms_db_get_delta_entry(ms_db_handle_t *h, int index, char *dst, int dst_size);
+MICRO_SWARM_API int ms_db_get_tombstone_entry(ms_db_handle_t *h, int index, char *dst, int dst_size);
 MICRO_SWARM_API int ms_db_query_simple(ms_db_handle_t *h, const char *table, const char *column, const char *value, int radius);
 MICRO_SWARM_API int ms_db_query_by_id(ms_db_handle_t *h, const char *table, int id, int radius);
 MICRO_SWARM_API int ms_db_query_simple_focus(ms_db_handle_t *h, const char *table, const char *column, const char *value, int center_x, int center_y, int radius);

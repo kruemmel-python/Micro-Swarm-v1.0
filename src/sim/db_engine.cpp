@@ -6,7 +6,9 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <fstream>
+#include <regex>
 #include <sstream>
 #include <string>
 
@@ -236,6 +238,25 @@ bool parse_identifier(const std::string &s, size_t &i, std::string &out) {
         if (i >= s.size()) return false;
         out = s.substr(start, i - start);
         i++;
+        size_t save = i;
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
+        if (i < s.size() && s[i] == '.') {
+            i++;
+            while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
+            if (i < s.size() && (s[i] == '`' || s[i] == '"')) {
+                char q2 = s[i++];
+                size_t s2 = i;
+                while (i < s.size() && s[i] != q2) i++;
+                if (i < s.size()) {
+                    out = s.substr(s2, i - s2);
+                    i++;
+                }
+            } else {
+                i = save;
+            }
+        } else {
+            i = save;
+        }
         return true;
     }
     size_t start = i;
@@ -283,6 +304,11 @@ bool parse_value(const std::string &s, size_t &i, std::string &out) {
         std::string val;
         while (i < s.size()) {
             char c = s[i++];
+            if (c == '\\' && i < s.size()) {
+                char n = s[i++];
+                val.push_back(n);
+                continue;
+            }
             if (c == quote) {
                 if (i < s.size() && s[i] == quote) {
                     val.push_back(quote);
@@ -331,6 +357,9 @@ bool parse_values_list(const std::string &s, size_t &i, std::vector<std::vector<
                 i++;
                 break;
             }
+            if (i < s.size()) {
+                return false;
+            }
         }
         if (!row.empty()) {
             rows.push_back(std::move(row));
@@ -370,6 +399,65 @@ bool parse_insert_statement(const std::string &stmt, SqlInsert &out) {
     }
     i += 6;
     return parse_values_list(stmt, i, out.rows);
+}
+
+bool parse_insert_statement_lenient(const std::string &stmt, SqlInsert &out) {
+    std::string lower = to_lower(stmt);
+    size_t pos = lower.find("insert");
+    if (pos == std::string::npos) return false;
+    pos = lower.find("into", pos);
+    if (pos == std::string::npos) return false;
+    pos += 4;
+    while (pos < stmt.size() && std::isspace(static_cast<unsigned char>(stmt[pos]))) pos++;
+    if (pos >= stmt.size()) return false;
+    std::string table;
+    size_t i = pos;
+    if (stmt[i] == '`' || stmt[i] == '"') {
+        char q = stmt[i++];
+        size_t s = i;
+        while (i < stmt.size() && stmt[i] != q) i++;
+        if (i >= stmt.size()) return false;
+        table = stmt.substr(s, i - s);
+        i++;
+        while (i < stmt.size() && std::isspace(static_cast<unsigned char>(stmt[i]))) i++;
+        if (i < stmt.size() && stmt[i] == '.') {
+            i++;
+            while (i < stmt.size() && std::isspace(static_cast<unsigned char>(stmt[i]))) i++;
+            if (i < stmt.size() && (stmt[i] == '`' || stmt[i] == '"')) {
+                char q2 = stmt[i++];
+                size_t s2 = i;
+                while (i < stmt.size() && stmt[i] != q2) i++;
+                if (i < stmt.size()) {
+                    table = stmt.substr(s2, i - s2);
+                    i++;
+                }
+            }
+        }
+    } else {
+        size_t s = i;
+        while (i < stmt.size()) {
+            char c = stmt[i];
+            if (std::isspace(static_cast<unsigned char>(c)) || c == '(' || c == ';') break;
+            if (c == '.') {
+                s = i + 1;
+            }
+            i++;
+        }
+        if (i <= s) return false;
+        table = stmt.substr(s, i - s);
+    }
+    if (table.empty()) return false;
+    size_t values_pos = lower.find("values", i);
+    if (values_pos == std::string::npos) return false;
+    values_pos += 6;
+    std::string tail = stmt.substr(values_pos);
+    size_t ti = 0;
+    while (ti < tail.size() && std::isspace(static_cast<unsigned char>(tail[ti]))) ti++;
+    if (ti >= tail.size() || tail[ti] != '(') return false;
+    out.table = table;
+    out.columns.clear();
+    out.rows.clear();
+    return parse_values_list(tail, ti, out.rows);
 }
 
 bool parse_create_table_statement(const std::string &stmt, std::string &table, std::vector<std::string> &columns) {
@@ -460,6 +548,294 @@ std::string build_raw_data(const std::vector<DbField> &fields) {
     return ss.str();
 }
 
+struct IngestRule {
+    std::string column;
+    std::string pattern;
+    double weight = 1.0;
+    std::string type;
+    bool pattern_rule = false;
+    std::regex pattern_re;
+};
+
+struct IngestRules {
+    std::vector<IngestRule> default_rules;
+    std::unordered_map<std::string, std::vector<IngestRule>> table_rules;
+};
+
+enum class JsonTok {
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    Colon,
+    Comma,
+    String,
+    Number,
+    Bare,
+    End,
+    Invalid
+};
+
+struct JsonToken {
+    JsonTok type = JsonTok::Invalid;
+    std::string text;
+    double number = 0.0;
+};
+
+class JsonReader {
+public:
+    explicit JsonReader(const std::string &src) : s(src) {}
+
+    JsonToken next() {
+        skip_ws();
+        if (i >= s.size()) return {JsonTok::End, {}, 0.0};
+        char c = s[i];
+        if (c == '{') { ++i; return {JsonTok::LBrace, "{", 0.0}; }
+        if (c == '}') { ++i; return {JsonTok::RBrace, "}", 0.0}; }
+        if (c == '[') { ++i; return {JsonTok::LBracket, "[", 0.0}; }
+        if (c == ']') { ++i; return {JsonTok::RBracket, "]", 0.0}; }
+        if (c == ':') { ++i; return {JsonTok::Colon, ":", 0.0}; }
+        if (c == ',') { ++i; return {JsonTok::Comma, ",", 0.0}; }
+        if (c == '"') {
+            ++i;
+            std::string out;
+            while (i < s.size()) {
+                char ch = s[i++];
+                if (ch == '"') break;
+                if (ch == '\\' && i < s.size()) {
+                    char esc = s[i++];
+                    switch (esc) {
+                        case '\\': out.push_back('\\'); break;
+                        case '"': out.push_back('"'); break;
+                        case 'n': out.push_back('\n'); break;
+                        case 'r': out.push_back('\r'); break;
+                        case 't': out.push_back('\t'); break;
+                        default: out.push_back(esc); break;
+                    }
+                } else {
+                    out.push_back(ch);
+                }
+            }
+            return {JsonTok::String, out, 0.0};
+        }
+        if (std::isdigit(static_cast<unsigned char>(c)) || c == '-' || c == '+') {
+            size_t start = i;
+            while (i < s.size()) {
+                char ch = s[i];
+                if (!std::isdigit(static_cast<unsigned char>(ch)) && ch != '.' && ch != 'e' && ch != 'E' &&
+                    ch != '-' && ch != '+') {
+                    break;
+                }
+                ++i;
+            }
+            std::string num = s.substr(start, i - start);
+            char *endp = nullptr;
+            double val = std::strtod(num.c_str(), &endp);
+            if (!endp || endp == num.c_str()) {
+                return {JsonTok::Invalid, num, 0.0};
+            }
+            return {JsonTok::Number, num, val};
+        }
+        if (std::isalpha(static_cast<unsigned char>(c))) {
+            size_t start = i;
+            while (i < s.size() && std::isalpha(static_cast<unsigned char>(s[i]))) ++i;
+            std::string word = s.substr(start, i - start);
+            return {JsonTok::Bare, word, 0.0};
+        }
+        ++i;
+        return {JsonTok::Invalid, std::string(1, c), 0.0};
+    }
+
+private:
+    void skip_ws() {
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    }
+
+    const std::string &s;
+    size_t i = 0;
+};
+
+bool skip_json_value_with_first(JsonReader &reader, JsonToken tok);
+
+bool skip_json_object(JsonReader &reader) {
+    for (;;) {
+        JsonToken key = reader.next();
+        if (key.type == JsonTok::RBrace) return true;
+        if (key.type != JsonTok::String && key.type != JsonTok::Bare) return false;
+        if (reader.next().type != JsonTok::Colon) return false;
+        if (!skip_json_value_with_first(reader, reader.next())) return false;
+        JsonToken sep = reader.next();
+        if (sep.type == JsonTok::RBrace) return true;
+        if (sep.type != JsonTok::Comma) return false;
+    }
+}
+
+bool skip_json_array(JsonReader &reader) {
+    for (;;) {
+        JsonToken next = reader.next();
+        if (next.type == JsonTok::RBracket) return true;
+        if (!skip_json_value_with_first(reader, next)) return false;
+        JsonToken sep = reader.next();
+        if (sep.type == JsonTok::RBracket) return true;
+        if (sep.type != JsonTok::Comma) return false;
+    }
+}
+
+bool skip_json_value_with_first(JsonReader &reader, JsonToken tok) {
+    if (tok.type == JsonTok::LBrace) return skip_json_object(reader);
+    if (tok.type == JsonTok::LBracket) return skip_json_array(reader);
+    return tok.type == JsonTok::String || tok.type == JsonTok::Number || tok.type == JsonTok::Bare;
+}
+
+bool parse_rule_object_from_open(JsonReader &reader, IngestRule &out, std::string &error) {
+    for (;;) {
+        JsonToken key = reader.next();
+        if (key.type == JsonTok::RBrace) break;
+        if (key.type != JsonTok::String) {
+            error = "rule key erwartet";
+            return false;
+        }
+        if (reader.next().type != JsonTok::Colon) {
+            error = "rule ':' erwartet";
+            return false;
+        }
+        JsonToken val = reader.next();
+        if (key.text == "column" && val.type == JsonTok::String) {
+            out.column = val.text;
+        } else if (key.text == "pattern" && val.type == JsonTok::String) {
+            out.pattern = val.text;
+            out.pattern_rule = true;
+        } else if (key.text == "weight" && val.type == JsonTok::Number) {
+            out.weight = val.number;
+        } else if (key.text == "type" && val.type == JsonTok::String) {
+            out.type = val.text;
+        } else {
+            if (!skip_json_value_with_first(reader, val)) {
+                error = "rule value ungueltig";
+                return false;
+            }
+        }
+        JsonToken sep = reader.next();
+        if (sep.type == JsonTok::RBrace) break;
+        if (sep.type != JsonTok::Comma) {
+            error = "rule ',' erwartet";
+            return false;
+        }
+    }
+    if (out.column.empty() && out.pattern.empty()) {
+        error = "rule braucht column oder pattern";
+        return false;
+    }
+    if (out.type.empty()) {
+        out.type = out.pattern_rule ? "foreign_key" : "trait_cluster";
+    }
+    out.type = to_lower(out.type);
+    if (out.pattern_rule) {
+        try {
+            out.pattern_re = std::regex(out.pattern, std::regex::icase);
+        } catch (const std::regex_error &) {
+            error = "ungueltiges Regex: " + out.pattern;
+            return false;
+        }
+    }
+    return true;
+}
+
+bool parse_rules_array(JsonReader &reader, std::vector<IngestRule> &out, std::string &error) {
+    JsonToken tok = reader.next();
+    if (tok.type != JsonTok::LBracket) {
+        error = "Array erwartet";
+        return false;
+    }
+    for (;;) {
+        JsonToken next = reader.next();
+        if (next.type == JsonTok::RBracket) break;
+        if (next.type != JsonTok::LBrace) {
+            error = "rule object erwartet";
+            return false;
+        }
+        IngestRule rule;
+        if (!parse_rule_object_from_open(reader, rule, error)) return false;
+        out.push_back(std::move(rule));
+        JsonToken sep = reader.next();
+        if (sep.type == JsonTok::RBracket) break;
+        if (sep.type != JsonTok::Comma) {
+            error = "rule ',' erwartet";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool load_ingest_rules(const std::string &path, IngestRules &rules, std::string &error) {
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        error = "Konnte ingest_rules nicht oeffnen: " + path;
+        return false;
+    }
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    JsonReader reader(content);
+    JsonToken root = reader.next();
+    if (root.type != JsonTok::LBrace) {
+        error = "JSON-Root muss Object sein";
+        return false;
+    }
+    for (;;) {
+        JsonToken key = reader.next();
+        if (key.type == JsonTok::RBrace) break;
+        if (key.type != JsonTok::String) {
+            error = "JSON-Key erwartet";
+            return false;
+        }
+        if (reader.next().type != JsonTok::Colon) {
+            error = "JSON ':' erwartet";
+            return false;
+        }
+        if (key.text == "default_rules") {
+            if (!parse_rules_array(reader, rules.default_rules, error)) return false;
+        } else if (key.text == "table_rules") {
+            JsonToken obj = reader.next();
+            if (obj.type != JsonTok::LBrace) {
+                error = "table_rules erwartet Object";
+                return false;
+            }
+            for (;;) {
+                JsonToken tkey = reader.next();
+                if (tkey.type == JsonTok::RBrace) break;
+                if (tkey.type != JsonTok::String) {
+                    error = "table name erwartet";
+                    return false;
+                }
+                if (reader.next().type != JsonTok::Colon) {
+                    error = "table_rules ':' erwartet";
+                    return false;
+                }
+                std::vector<IngestRule> table_entries;
+                if (!parse_rules_array(reader, table_entries, error)) return false;
+                rules.table_rules[to_lower(tkey.text)] = std::move(table_entries);
+                JsonToken sep = reader.next();
+                if (sep.type == JsonTok::RBrace) break;
+                if (sep.type != JsonTok::Comma) {
+                    error = "table_rules ',' erwartet";
+                    return false;
+                }
+            }
+        } else {
+            if (!skip_json_value_with_first(reader, reader.next())) {
+                error = "JSON-Parsing fehlgeschlagen";
+                return false;
+            }
+        }
+        JsonToken sep = reader.next();
+        if (sep.type == JsonTok::RBrace) break;
+        if (sep.type != JsonTok::Comma) {
+            error = "JSON ',' erwartet";
+            return false;
+        }
+    }
+    return true;
+}
+
 struct DbCarrierAgent {
     float x = 0.0f;
     float y = 0.0f;
@@ -529,13 +905,25 @@ void rebuild_foreign_keys(DbWorld &world, DbPayload &payload) {
         int fk_id = 0;
         if (!parse_int_value(f.value, fk_id)) continue;
         std::string fk_table = fk_table_from_column(f.name);
-        int fk_table_id = db_add_table(world, fk_table);
+        int fk_table_id = db_find_table(world, fk_table);
         DbForeignKey fk;
         fk.table_id = fk_table_id;
         fk.id = fk_id;
         fk.column = f.name;
         payload.foreign_keys.push_back(fk);
     }
+}
+
+void deactivate_payload(DbPayload &payload) {
+    payload.id = 0;
+    payload.table_id = -1;
+    payload.foreign_keys.clear();
+    payload.fields.clear();
+    payload.raw_data.clear();
+    payload.x = -1;
+    payload.y = -1;
+    payload.placed = false;
+    payload.is_delta = false;
 }
 
 bool apply_set_fields(DbWorld &world,
@@ -813,6 +1201,14 @@ bool db_load_sql(const std::string &path, DbWorld &world, std::string &error) {
             continue;
         }
 
+        if (in_string && c == '\\') {
+            stmt.push_back(c);
+            if (n != '\0') {
+                stmt.push_back(n);
+                i++;
+            }
+            continue;
+        }
         if (c == '\'' || c == '"') {
             if (!in_string) {
                 in_string = true;
@@ -841,7 +1237,7 @@ bool db_load_sql(const std::string &path, DbWorld &world, std::string &error) {
                 continue;
             }
             SqlInsert insert;
-            if (parse_insert_statement(stmt, insert)) {
+            if (parse_insert_statement(stmt, insert) || parse_insert_statement_lenient(stmt, insert)) {
                 int table_id = db_add_table(world, insert.table);
                 if (!insert.columns.empty() && world.table_columns[static_cast<size_t>(table_id)].empty()) {
                     world.table_columns[static_cast<size_t>(table_id)] = insert.columns;
@@ -897,12 +1293,14 @@ bool db_load_sql(const std::string &path, DbWorld &world, std::string &error) {
                         int fk_id = 0;
                         if (!parse_int_value(f.value, fk_id)) continue;
                         std::string fk_table = fk_table_from_column(f.name);
-                        int fk_table_id = db_add_table(world, fk_table);
-                        DbForeignKey fk;
-                        fk.table_id = fk_table_id;
-                        fk.id = fk_id;
-                        fk.column = f.name;
-                        payload.foreign_keys.push_back(fk);
+                        int fk_table_id = db_find_table(world, fk_table);
+                        if (fk_table_id >= 0) { // <--- WICHTIGE PRÜFUNG HINZUFÜGEN
+                            DbForeignKey fk;
+                            fk.table_id = fk_table_id;
+                            fk.id = fk_id;
+                            fk.column = f.name;
+                            payload.foreign_keys.push_back(fk);
+                        }
                     }
                     payload.raw_data = build_raw_data(payload.fields);
                     world.payloads.push_back(std::move(payload));
@@ -927,6 +1325,23 @@ bool db_run_ingest(DbWorld &world, const DbIngestConfig &cfg, std::string &error
         error = "Keine Payloads vorhanden.";
         return false;
     }
+    IngestRules ingest_rules;
+    if (!cfg.rules_path.empty()) {
+        std::string rules_error;
+        if (!load_ingest_rules(cfg.rules_path, ingest_rules, rules_error)) {
+            error = "Ingest-Regeln: " + rules_error;
+            return false;
+        }
+    }
+    if (ingest_rules.default_rules.empty()) {
+        IngestRule rule;
+        rule.pattern = ".*_id$";
+        rule.pattern_rule = true;
+        rule.weight = 1.0;
+        rule.type = "foreign_key";
+        rule.pattern_re = std::regex(rule.pattern, std::regex::icase);
+        ingest_rules.default_rules.push_back(std::move(rule));
+    }
     db_init_world(world, world.width, world.height);
     Rng rng(cfg.seed);
     int spawn_x = cfg.spawn_x >= 0 ? cfg.spawn_x : world.width / 2;
@@ -948,6 +1363,32 @@ bool db_run_ingest(DbWorld &world, const DbIngestConfig &cfg, std::string &error
         agents.push_back(a);
     }
 
+    struct TraitCenter {
+        double sum_x = 0.0;
+        double sum_y = 0.0;
+        double sum_w = 0.0;
+    };
+    std::unordered_map<std::string, TraitCenter> trait_centers;
+
+    auto trait_key = [&](const std::string &table, const std::string &column, const std::string &value) {
+        return to_lower(table) + ":" + to_lower(column) + ":" + to_lower(value);
+    };
+    auto get_field_value = [&](const DbPayload &payload, const std::string &column, std::string &out) {
+        for (const auto &f : payload.fields) {
+            if (ieq(f.name, column)) {
+                out = f.value;
+                return true;
+            }
+        }
+        return false;
+    };
+    auto resolve_domain = [](const std::string &value, std::string &out) {
+        const auto at = value.find('@');
+        if (at == std::string::npos || at + 1 >= value.size()) return false;
+        out = value.substr(at + 1);
+        return true;
+    };
+
     GridField phero_accum(world.width, world.height, 0.0f);
     FieldParams pheromone_params{0.02f, 0.15f};
 
@@ -968,17 +1409,89 @@ bool db_run_ingest(DbWorld &world, const DbIngestConfig &cfg, std::string &error
             bool has_target = false;
             int tx = spawn_x;
             int ty = spawn_y;
-            if (!payload.foreign_keys.empty()) {
-                for (const auto &fk : payload.foreign_keys) {
-                    int64_t key = make_payload_key(fk.table_id, fk.id);
+            double sum_x = 0.0;
+            double sum_y = 0.0;
+            double sum_w = 0.0;
+            auto add_target = [&](int x, int y, double weight) {
+                if (weight <= 0.0) return;
+                sum_x += static_cast<double>(x) * weight;
+                sum_y += static_cast<double>(y) * weight;
+                sum_w += weight;
+            };
+            for (const auto &fk : payload.foreign_keys) {
+                int64_t key = make_payload_key(fk.table_id, fk.id);
+                auto it = world.payload_positions.find(key);
+                if (it != world.payload_positions.end()) {
+                    add_target(it->second.first, it->second.second, 1.0);
+                }
+            }
+            const std::string table_name = (payload.table_id >= 0 &&
+                                            payload.table_id < static_cast<int>(world.table_names.size()))
+                                             ? world.table_names[static_cast<size_t>(payload.table_id)]
+                                             : std::string();
+            auto table_it = ingest_rules.table_rules.find(to_lower(table_name));
+
+            auto apply_rule = [&](const IngestRule &rule, const std::string &column, const std::string &value) {
+                if (rule.type == "foreign_key") {
+                    int fk_id = 0;
+                    if (!parse_int_value(value, fk_id)) return;
+                    std::string fk_table = fk_table_from_column(column);
+                    int fk_table_id = db_find_table(world, fk_table);
+                    if (fk_table_id < 0) return;
+                    int64_t key = make_payload_key(fk_table_id, fk_id);
                     auto it = world.payload_positions.find(key);
                     if (it != world.payload_positions.end()) {
-                        tx = it->second.first;
-                        ty = it->second.second;
-                        has_target = true;
-                        break;
+                        add_target(it->second.first, it->second.second, rule.weight);
+                    }
+                    return;
+                }
+                std::string key_value = value;
+                if (rule.type == "domain_cluster") {
+                    if (!resolve_domain(value, key_value)) return;
+                }
+                const std::string key = trait_key(table_name, column, key_value);
+                auto it = trait_centers.find(key);
+                if (it != trait_centers.end() && it->second.sum_w > 0.0) {
+                    int cx = static_cast<int>(std::round(it->second.sum_x / it->second.sum_w));
+                    int cy = static_cast<int>(std::round(it->second.sum_y / it->second.sum_w));
+                    add_target(cx, cy, rule.weight);
+                }
+            };
+
+            for (const auto &rule : ingest_rules.default_rules) {
+                if (rule.pattern_rule) {
+                    for (const auto &f : payload.fields) {
+                        if (std::regex_match(f.name, rule.pattern_re)) {
+                            apply_rule(rule, f.name, f.value);
+                        }
+                    }
+                } else if (!rule.column.empty()) {
+                    std::string value;
+                    if (get_field_value(payload, rule.column, value)) {
+                        apply_rule(rule, rule.column, value);
                     }
                 }
+            }
+            if (table_it != ingest_rules.table_rules.end()) {
+                for (const auto &rule : table_it->second) {
+                    if (rule.pattern_rule) {
+                        for (const auto &f : payload.fields) {
+                            if (std::regex_match(f.name, rule.pattern_re)) {
+                                apply_rule(rule, f.name, f.value);
+                            }
+                        }
+                    } else if (!rule.column.empty()) {
+                        std::string value;
+                        if (get_field_value(payload, rule.column, value)) {
+                            apply_rule(rule, rule.column, value);
+                        }
+                    }
+                }
+            }
+            if (sum_w > 0.0) {
+                tx = static_cast<int>(std::round(sum_x / sum_w));
+                ty = static_cast<int>(std::round(sum_y / sum_w));
+                has_target = true;
             }
             float dx = static_cast<float>(tx) - agent.x;
             float dy = static_cast<float>(ty) - agent.y;
@@ -999,6 +1512,66 @@ bool db_run_ingest(DbWorld &world, const DbIngestConfig &cfg, std::string &error
             bool allow_place = has_target ? (dist <= 2.5f) : (rng.uniform(0.0f, 1.0f) < 0.1f);
             if (allow_place && find_empty_near(world, cx, cy, 2, place_x, place_y)) {
                 db_place_payload(world, agent.payload_index, place_x, place_y);
+                for (const auto &rule : ingest_rules.default_rules) {
+                    if (rule.type == "foreign_key") continue;
+                    if (rule.pattern_rule) {
+                        for (const auto &f : payload.fields) {
+                            if (!std::regex_match(f.name, rule.pattern_re)) continue;
+                            std::string key_value = f.value;
+                            if (rule.type == "domain_cluster") {
+                                if (!resolve_domain(f.value, key_value)) continue;
+                            }
+                            const std::string key = trait_key(table_name, f.name, key_value);
+                            auto &center = trait_centers[key];
+                            center.sum_x += place_x * rule.weight;
+                            center.sum_y += place_y * rule.weight;
+                            center.sum_w += rule.weight;
+                        }
+                    } else if (!rule.column.empty()) {
+                        std::string value;
+                        if (!get_field_value(payload, rule.column, value)) continue;
+                        std::string key_value = value;
+                        if (rule.type == "domain_cluster") {
+                            if (!resolve_domain(value, key_value)) continue;
+                        }
+                        const std::string key = trait_key(table_name, rule.column, key_value);
+                        auto &center = trait_centers[key];
+                        center.sum_x += place_x * rule.weight;
+                        center.sum_y += place_y * rule.weight;
+                        center.sum_w += rule.weight;
+                    }
+                }
+                if (table_it != ingest_rules.table_rules.end()) {
+                    for (const auto &rule : table_it->second) {
+                        if (rule.type == "foreign_key") continue;
+                        if (rule.pattern_rule) {
+                            for (const auto &f : payload.fields) {
+                                if (!std::regex_match(f.name, rule.pattern_re)) continue;
+                                std::string key_value = f.value;
+                                if (rule.type == "domain_cluster") {
+                                    if (!resolve_domain(f.value, key_value)) continue;
+                                }
+                                const std::string key = trait_key(table_name, f.name, key_value);
+                                auto &center = trait_centers[key];
+                                center.sum_x += place_x * rule.weight;
+                                center.sum_y += place_y * rule.weight;
+                                center.sum_w += rule.weight;
+                            }
+                        } else if (!rule.column.empty()) {
+                            std::string value;
+                            if (!get_field_value(payload, rule.column, value)) continue;
+                            std::string key_value = value;
+                            if (rule.type == "domain_cluster") {
+                                if (!resolve_domain(value, key_value)) continue;
+                            }
+                            const std::string key = trait_key(table_name, rule.column, key_value);
+                            auto &center = trait_centers[key];
+                            center.sum_x += place_x * rule.weight;
+                            center.sum_y += place_y * rule.weight;
+                            center.sum_w += rule.weight;
+                        }
+                    }
+                }
                 agent.payload_index = -1;
             }
         }
@@ -1515,6 +2088,14 @@ bool db_apply_insert_sql(DbWorld &world, const std::string &stmt, int &rows, std
         payload.placed = false;
         payload.x = -1;
         payload.y = -1;
+        bool had_prev = false;
+        DbPayload prev_payload;
+        auto it_prev = world.delta_index_by_key.find(key);
+        if (it_prev != world.delta_index_by_key.end()) {
+            had_prev = true;
+            prev_payload = world.payloads[static_cast<size_t>(it_prev->second)];
+        }
+        bool prev_tombstone = world.tombstones.find(key) != world.tombstones.end();
         world.tombstones.erase(key);
         auto it = world.delta_index_by_key.find(key);
         if (it != world.delta_index_by_key.end()) {
@@ -1524,6 +2105,13 @@ bool db_apply_insert_sql(DbWorld &world, const std::string &stmt, int &rows, std
             world.payloads.push_back(std::move(payload));
             world.delta_index_by_key[key] = idx;
         }
+        DbDeltaOp op;
+        op.kind = DbDeltaOp::INSERT;
+        op.key = key;
+        op.had_prev = had_prev;
+        op.prev_payload = std::move(prev_payload);
+        op.prev_tombstone = prev_tombstone;
+        world.delta_history.push_back(std::move(op));
         rows++;
     }
     return true;
@@ -1559,9 +2147,17 @@ bool db_apply_update_sql(DbWorld &world, const std::string &stmt, int &rows, std
         if (payload_tombstoned(world, key)) continue;
         bool match = pk_query ? (p.id == target_id) : match_field(p, where_col, where_val);
         if (!match) continue;
+        DbPayload prev_payload = p;
         if (!apply_set_fields(world, p, sets, table, error)) {
             return false;
         }
+        DbDeltaOp op;
+        op.kind = DbDeltaOp::UPDATE;
+        op.key = key;
+        op.had_prev = true;
+        op.prev_payload = std::move(prev_payload);
+        op.prev_tombstone = payload_tombstoned(world, key);
+        world.delta_history.push_back(std::move(op));
         rows++;
     }
     std::vector<int> base_hits;
@@ -1594,6 +2190,12 @@ bool db_apply_update_sql(DbWorld &world, const std::string &stmt, int &rows, std
             world.payloads.push_back(std::move(updated));
             world.delta_index_by_key[key] = idx;
         }
+        DbDeltaOp op;
+        op.kind = DbDeltaOp::UPDATE;
+        op.key = key;
+        op.had_prev = false;
+        op.prev_tombstone = payload_tombstoned(world, key);
+        world.delta_history.push_back(std::move(op));
         rows++;
     }
     return true;
@@ -1628,6 +2230,12 @@ bool db_apply_delete_sql(DbWorld &world, const std::string &stmt, int &rows, std
         if (!p.is_delta && base_overridden(world, key)) continue;
         bool match = pk_query ? (p.id == target_id) : match_field(p, where_col, where_val);
         if (!match) continue;
+        DbDeltaOp op;
+        op.kind = DbDeltaOp::DELETE;
+        op.key = key;
+        op.had_prev = false;
+        op.prev_tombstone = payload_tombstoned(world, key);
+        world.delta_history.push_back(std::move(op));
         world.tombstones.insert(key);
         rows++;
     }
@@ -1667,7 +2275,63 @@ bool db_merge_delta(DbWorld &world, const DbIngestConfig &cfg, std::string &erro
     world.payloads.swap(merged);
     world.delta_index_by_key.clear();
     world.tombstones.clear();
+    world.delta_history.clear();
     return db_run_ingest(world, cfg, error);
+}
+
+bool db_undo_last_delta(DbWorld &world, std::string &error) {
+    if (world.delta_history.empty()) {
+        error = "Kein Undo verfuegbar.";
+        return false;
+    }
+    DbDeltaOp op = world.delta_history.back();
+    world.delta_history.pop_back();
+    if (op.kind == DbDeltaOp::INSERT) {
+        auto it = world.delta_index_by_key.find(op.key);
+        if (it != world.delta_index_by_key.end()) {
+            if (op.had_prev) {
+                world.payloads[static_cast<size_t>(it->second)] = op.prev_payload;
+            } else {
+                deactivate_payload(world.payloads[static_cast<size_t>(it->second)]);
+                world.delta_index_by_key.erase(it);
+            }
+        }
+        if (op.prev_tombstone) {
+            world.tombstones.insert(op.key);
+        } else {
+            world.tombstones.erase(op.key);
+        }
+        return true;
+    }
+    if (op.kind == DbDeltaOp::UPDATE) {
+        auto it = world.delta_index_by_key.find(op.key);
+        if (op.had_prev) {
+            if (it != world.delta_index_by_key.end()) {
+                world.payloads[static_cast<size_t>(it->second)] = op.prev_payload;
+            }
+        } else {
+            if (it != world.delta_index_by_key.end()) {
+                deactivate_payload(world.payloads[static_cast<size_t>(it->second)]);
+                world.delta_index_by_key.erase(it);
+            }
+        }
+        if (op.prev_tombstone) {
+            world.tombstones.insert(op.key);
+        } else {
+            world.tombstones.erase(op.key);
+        }
+        return true;
+    }
+    if (op.kind == DbDeltaOp::DELETE) {
+        if (op.prev_tombstone) {
+            world.tombstones.insert(op.key);
+        } else {
+            world.tombstones.erase(op.key);
+        }
+        return true;
+    }
+    error = "Undo fehlgeschlagen.";
+    return false;
 }
 
 bool db_save_cluster_ppm(const std::string &path, const DbWorld &world, int scale, std::string &error) {

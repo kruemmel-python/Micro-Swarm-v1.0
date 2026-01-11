@@ -46,6 +46,8 @@ add_library(micro_swarm_shared SHARED
     src/sim/agent.h
     src/sim/db_engine.cpp
     src/sim/db_engine.h
+    src/sim/db_sql.cpp
+    src/sim/db_sql.h
     src/sim/dna_memory.cpp
     src/sim/dna_memory.h
     src/sim/environment.cpp
@@ -93,3 +95,5 @@ else()
     target_compile_definitions(micro_swarm PRIVATE MICRO_SWARM_OPENCL=0)
     target_compile_definitions(micro_swarm_shared PRIVATE MICRO_SWARM_OPENCL=0)
 endif()
+
+add_subdirectory(Workbench)

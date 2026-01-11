@@ -1,4 +1,5 @@
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <iomanip>
 #include <sstream>
@@ -8,6 +9,9 @@
 #include <vector>
 #include <cmath>
 #include <array>
+#include <unordered_map>
+#include <chrono>
+#include <ctime>
 
 #include "compute/opencl_loader.h"
 #include "compute/opencl_runtime.h"
@@ -80,6 +84,7 @@ struct CliOptions {
     std::string db_output;
     std::string db_dump_path;
     int db_dump_scale = 4;
+    std::string ingest_rules_path;
     std::string db_path;
     std::string db_query;
     int db_radius = 5;
@@ -177,6 +182,7 @@ void print_help() {
               << "  --output PATH   MYCO-Output fuer db_ingest\n"
               << "  --db-dump PATH  Cluster-PPM-Output fuer db_ingest\n"
               << "  --db-dump-scale N  Skalierung fuer PPM-Output (Default 4)\n"
+              << "  --ingest-rules PATH  JSON-Regeln fuer Trait-Cluster beim Ingest\n"
               << "  --db PATH       MYCO-Input fuer db_query\n"
               << "  --query TEXT    Query fuer db_query (SQL-Light)\n"
               << "  --db-radius N   Radius fuer db_query (Default 5)\n"
@@ -422,6 +428,11 @@ bool parse_cli(int argc, char **argv, CliOptions &opts) {
             }
         } else if (arg == "--db-dump-scale") {
             if (!parse_int(value, opts.db_dump_scale)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+        } else if (arg == "--ingest-rules") {
+            if (!parse_string(value, opts.ingest_rules_path)) {
                 std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
                 return false;
             }
@@ -723,6 +734,7 @@ int main(int argc, char **argv) {
         cfg.agent_count = opts.params.agent_count;
         cfg.steps = opts.params.steps;
         cfg.seed = opts.seed;
+        cfg.rules_path = opts.ingest_rules_path;
         if (!db_run_ingest(world, cfg, error)) {
             std::cerr << "Ingest-Fehler: " << error << "\n";
             return 1;
@@ -875,6 +887,7 @@ int main(int argc, char **argv) {
         merge_cfg.agent_count = opts.db_merge_agents;
         merge_cfg.steps = opts.db_merge_steps;
         merge_cfg.seed = opts.db_merge_seed;
+        merge_cfg.rules_path = opts.ingest_rules_path;
         bool focus_set = false;
         int focus_x = 0;
         int focus_y = 0;
@@ -884,6 +897,235 @@ int main(int argc, char **argv) {
         DbSqlResult last_sql_result;
         DbSqlResult last_sql_original;
         bool last_sql_valid = false;
+        int auto_merge_threshold = opts.db_merge_threshold;
+        std::vector<std::string> history;
+        std::unordered_map<std::string, std::string> macros;
+        std::vector<std::string> global_show;
+        bool global_show_enabled = false;
+        struct LastQueryInfo {
+            std::string text;
+            bool is_sql = false;
+            bool local = false;
+            bool fallback_global = false;
+            int hits = 0;
+        };
+        LastQueryInfo last_query;
+        auto trim_ws = [](std::string s) {
+            size_t start = 0;
+            while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) start++;
+            size_t end = s.size();
+            while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1]))) end--;
+            return s.substr(start, end - start);
+        };
+        auto lower_copy = [](std::string s) {
+            for (char &c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+        auto apply_limit = [&](DbSqlResult &result) {
+            if (world.default_limit < 0) return;
+            if (static_cast<int>(result.rows.size()) <= world.default_limit) return;
+            std::vector<std::vector<std::string>> limited;
+            limited.reserve(static_cast<size_t>(world.default_limit));
+            for (int i = 0; i < world.default_limit; ++i) {
+                limited.push_back(result.rows[static_cast<size_t>(i)]);
+            }
+            result.rows.swap(limited);
+        };
+        auto sql_has_limit_offset = [&](const std::string &sql) {
+            const std::string lower = lower_copy(sql);
+            if (lower.rfind("limit ", 0) == 0 || lower.rfind("offset ", 0) == 0) return true;
+            if (lower.find(" limit ") != std::string::npos || lower.find(" offset ") != std::string::npos) return true;
+            return false;
+        };
+        auto sql_selects_all_no_limit = [&](const std::string &sql) {
+            const std::string lower = lower_copy(trim_ws(sql));
+            if (sql_has_limit_offset(lower)) return false;
+            size_t pos = lower.find("select");
+            if (pos == std::string::npos) return false;
+            pos += 6;
+            while (pos < lower.size() && std::isspace(static_cast<unsigned char>(lower[pos]))) ++pos;
+            return pos < lower.size() && lower[pos] == '*';
+        };
+        auto json_escape = [](const std::string &value) {
+            std::string out;
+            out.reserve(value.size() + 8);
+            for (char c : value) {
+                switch (c) {
+                    case '\\': out += "\\\\"; break;
+                    case '"': out += "\\\""; break;
+                    case '\n': out += "\\n"; break;
+                    case '\r': out += "\\r"; break;
+                    case '\t': out += "\\t"; break;
+                    default: out.push_back(c); break;
+                }
+            }
+            return out;
+        };
+        auto json_read_string = [](const std::string &s, size_t &i, std::string &out) {
+            if (i >= s.size() || s[i] != '"') return false;
+            ++i;
+            std::string result;
+            while (i < s.size()) {
+                char c = s[i++];
+                if (c == '"') {
+                    out = result;
+                    return true;
+                }
+                if (c == '\\' && i < s.size()) {
+                    char esc = s[i++];
+                    switch (esc) {
+                        case '\\': result.push_back('\\'); break;
+                        case '"': result.push_back('"'); break;
+                        case 'n': result.push_back('\n'); break;
+                        case 'r': result.push_back('\r'); break;
+                        case 't': result.push_back('\t'); break;
+                        default: result.push_back(esc); break;
+                    }
+                } else {
+                    result.push_back(c);
+                }
+            }
+            return false;
+        };
+        auto save_macros = [&](const std::string &path) {
+            std::ofstream out(path, std::ios::binary);
+            if (!out) {
+                std::cout << "Konnte Datei nicht schreiben: " << path << "\n";
+                return;
+            }
+            out << "[\n";
+            bool first = true;
+            for (const auto &entry : macros) {
+                if (!first) out << ",\n";
+                first = false;
+                out << "  {\"name\":\"" << json_escape(entry.first) << "\",\"command\":\""
+                    << json_escape(entry.second) << "\"}";
+            }
+            out << "\n]\n";
+            std::cout << "Makros gespeichert: " << path << "\n";
+        };
+        auto load_macros = [&](const std::string &path) {
+            std::ifstream in(path, std::ios::binary);
+            if (!in) {
+                std::cout << "Konnte Datei nicht lesen: " << path << "\n";
+                return;
+            }
+            std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            size_t i = 0;
+            std::string name;
+            std::string command;
+            int loaded = 0;
+            while (i < content.size()) {
+                if (content[i] == '"') {
+                    std::string key;
+                    size_t key_pos = i;
+                    if (!json_read_string(content, i, key)) {
+                        i = key_pos + 1;
+                        continue;
+                    }
+                    while (i < content.size() && std::isspace(static_cast<unsigned char>(content[i]))) ++i;
+                    if (i < content.size() && content[i] == ':') ++i;
+                    while (i < content.size() && std::isspace(static_cast<unsigned char>(content[i]))) ++i;
+                    if (key == "name" || key == "command") {
+                        std::string value;
+                        if (json_read_string(content, i, value)) {
+                            if (key == "name") name = value;
+                            if (key == "command") command = value;
+                            if (!name.empty() && !command.empty()) {
+                                macros[name] = command;
+                                name.clear();
+                                command.clear();
+                                ++loaded;
+                            }
+                        }
+                    }
+                } else {
+                    ++i;
+                }
+            }
+            std::cout << "Makros geladen: " << loaded << "\n";
+        };
+        auto print_duration = [&](long long ms) {
+            if (ms < 1000) {
+                std::cout << "Ausfuehrungszeit: " << ms << " ms\n";
+            } else {
+                double sec = static_cast<double>(ms) / 1000.0;
+                std::cout << "Ausfuehrungszeit: " << std::fixed << std::setprecision(3) << sec << " s\n";
+                std::cout.unsetf(std::ios::floatfield);
+                std::cout << std::setprecision(6);
+            }
+        };
+        auto serialize_sql_result = [&](const DbSqlResult &result, const std::string &format) -> std::string {
+            std::ostringstream out;
+            auto escape_csv = [&](const std::string &s) {
+                std::string v = s;
+                bool need_quotes = v.find(',') != std::string::npos || v.find('"') != std::string::npos ||
+                                   v.find('\n') != std::string::npos || v.find('\r') != std::string::npos;
+                if (v.find('"') != std::string::npos) {
+                    std::string escaped;
+                    for (char c : v) {
+                        if (c == '"') escaped += "\"\"";
+                        else escaped.push_back(c);
+                    }
+                    v = escaped;
+                    need_quotes = true;
+                }
+                if (need_quotes) {
+                    return "\"" + v + "\"";
+                }
+                return v;
+            };
+            auto escape_json = [&](const std::string &s) {
+                std::string v;
+                v.reserve(s.size());
+                for (char c : s) {
+                    switch (c) {
+                        case '\\': v += "\\\\"; break;
+                        case '"': v += "\\\""; break;
+                        case '\n': v += "\\n"; break;
+                        case '\r': v += "\\r"; break;
+                        case '\t': v += "\\t"; break;
+                        default: v.push_back(c); break;
+                    }
+                }
+                return v;
+            };
+            if (format == "csv") {
+                if (!result.columns.empty()) {
+                    for (size_t i = 0; i < result.columns.size(); ++i) {
+                        if (i > 0) out << ",";
+                        out << escape_csv(result.columns[i]);
+                    }
+                    out << "\n";
+                }
+                for (const auto &row : result.rows) {
+                    for (size_t i = 0; i < row.size(); ++i) {
+                        if (i > 0) out << ",";
+                        out << escape_csv(row[i]);
+                    }
+                    out << "\n";
+                }
+                return out.str();
+            }
+            if (format == "json") {
+                out << "[\n";
+                for (size_t r = 0; r < result.rows.size(); ++r) {
+                    out << "  {";
+                    for (size_t c = 0; c < result.columns.size(); ++c) {
+                        if (c > 0) out << ", ";
+                        std::string key = (c < result.columns.size()) ? result.columns[c] : ("col" + std::to_string(c));
+                        std::string val = (c < result.rows[r].size()) ? result.rows[r][c] : "";
+                        out << "\"" << escape_json(key) << "\": \"" << escape_json(val) << "\"";
+                    }
+                    out << "}";
+                    if (r + 1 < result.rows.size()) out << ",";
+                    out << "\n";
+                }
+                out << "]\n";
+                return out.str();
+            }
+            return "";
+        };
         std::cout << "myco shell bereit. 'help' fuer Befehle, 'exit' zum Beenden.\n";
         for (;;) {
             std::cout << "myco> ";
@@ -891,15 +1133,103 @@ int main(int argc, char **argv) {
             if (!std::getline(std::cin, line)) {
                 break;
             }
-            auto trim_ws = [](std::string s) {
-                size_t start = 0;
-                while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) start++;
-                size_t end = s.size();
-                while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1]))) end--;
-                return s.substr(start, end - start);
-            };
             line = trim_ws(line);
             if (line.empty()) continue;
+            if (line == "history") {
+                for (size_t i = 0; i < history.size(); ++i) {
+                    std::cout << (i + 1) << ": " << history[i] << "\n";
+                }
+                continue;
+            }
+            if (line == "cls" || line == "clear") {
+#ifdef _WIN32
+                std::system("cls");
+#else
+                std::system("clear");
+#endif
+                continue;
+            }
+            if (line == "last" || line == "redo") {
+                if (history.empty()) {
+                    std::cout << "Keine Historie.\n";
+                    continue;
+                }
+                line = history.back();
+                std::cout << line << "\n";
+            } else if (!line.empty() && line[0] == '!') {
+                std::string num = line.substr(1);
+                int idx = 0;
+                try { idx = std::stoi(num); } catch (...) { idx = 0; }
+                if (idx <= 0 || static_cast<size_t>(idx) > history.size()) {
+                    std::cout << "Ungueltige History-ID.\n";
+                    continue;
+                }
+                line = history[static_cast<size_t>(idx - 1)];
+                std::cout << line << "\n";
+            }
+            if (line.rfind("save ", 0) == 0) {
+                std::string rest = trim_ws(line.substr(5));
+                if (rest.empty()) {
+                    std::cout << "save <name> [command]\n";
+                    continue;
+                }
+                std::string name;
+                std::string cmd;
+                size_t sp = rest.find(' ');
+                if (sp == std::string::npos) {
+                    name = rest;
+                    if (history.empty()) {
+                        std::cout << "Keine Historie.\n";
+                        continue;
+                    }
+                    cmd = history.back();
+                } else {
+                    name = trim_ws(rest.substr(0, sp));
+                    cmd = trim_ws(rest.substr(sp + 1));
+                }
+                macros[name] = cmd;
+                std::cout << "saved " << name << "\n";
+                continue;
+            }
+            if (line.rfind("run ", 0) == 0) {
+                std::string name = trim_ws(line.substr(4));
+                auto it = macros.find(name);
+                if (it == macros.end()) {
+                    std::cout << "Makro nicht gefunden.\n";
+                    continue;
+                }
+                line = it->second;
+                std::cout << line << "\n";
+            }
+            if (line.rfind("macros save", 0) == 0) {
+                std::string rest = trim_ws(line.substr(11));
+                std::string path = rest;
+                if (path.empty()) {
+                    auto now = std::chrono::system_clock::now();
+                    std::time_t tt = std::chrono::system_clock::to_time_t(now);
+                    std::tm tm{};
+#ifdef _WIN32
+                    localtime_s(&tm, &tt);
+#else
+                    localtime_r(&tt, &tm);
+#endif
+                    std::ostringstream name;
+                    name << std::put_time(&tm, "%Y-%m-%d") << "_macros.json";
+                    path = (std::filesystem::current_path() / name.str()).string();
+                }
+                save_macros(path);
+                continue;
+            }
+            if (line.rfind("macros load ", 0) == 0) {
+                std::string path = trim_ws(line.substr(12));
+                if (path.empty()) {
+                    std::cout << "macros load <path>\n";
+                    continue;
+                }
+                load_macros(path);
+                continue;
+            }
+            history.push_back(line);
             if (line == "exit" || line == "quit") break;
             if (line == "help") {
                 std::cout << "Formate:\n";
@@ -908,17 +1238,33 @@ int main(int argc, char **argv) {
                 std::cout << "  goto <payload_id>       -> Fokus setzen\n";
                 std::cout << "  radius <n>              -> Suchradius setzen\n";
                 std::cout << "  focus                   -> Aktuellen Fokus anzeigen\n";
+                std::cout << "  limit <n|off>           -> Default-Limit fuer Shell/SQL\n";
+                std::cout << "  show <cols|off>          -> Globale Show-Filter\n";
+                std::cout << "  describe <table>         -> Schema + Beispiel\n";
                 std::cout << "  tables                  -> Tabellenliste\n";
                 std::cout << "  stats                   -> Payload-Counts pro Tabelle\n";
                 std::cout << "  delta                   -> Delta-Status\n";
                 std::cout << "  merge                   -> Delta in Cluster mergen\n";
+                std::cout << "  merge auto <n>           -> Auto-Merge ab Delta-Size N\n";
+                std::cout << "  delta show              -> Delta-Details\n";
+                std::cout << "  undo                    -> Letztes Delta rueckgaengig\n";
                 std::cout << "  schema <table>           -> Spaltenliste\n";
+                std::cout << "  ingest <sql> [rules]     -> SQL-Dump ingestieren (ersetzen)\n";
+                std::cout << "  history                 -> Historie anzeigen\n";
+                std::cout << "  last | redo | !n         -> Query aus Historie\n";
+                std::cout << "  save <name> [cmd]        -> Makro speichern\n";
+                std::cout << "  run <name>               -> Makro ausfuehren\n";
+                std::cout << "  macros save [path]        -> Makros als JSON speichern\n";
+                std::cout << "  macros load <path>        -> Makros aus JSON laden\n";
+                std::cout << "  cls | clear              -> Shell leeren\n";
                 std::cout << "  <Table> ... show Cols    -> Ausgabe auf Spalten filtern\n";
                 std::cout << "  Col=Value                -> Globale Spaltenabfrage\n";
                 std::cout << "  sql <statement>          -> SQL (SELECT/INSERT/UPDATE/DELETE)\n";
                 std::cout << "  sort <col|index> [asc|desc] [num][, <col|index> [asc|desc] [num] ...]\n";
                 std::cout << "                           -> Letztes SQL-Result sortieren\n";
                 std::cout << "  sort reset               -> Letztes SQL-Result zuruecksetzen\n";
+                std::cout << "  export <csv|json> <path> -> Letztes Result exportieren\n";
+                std::cout << "  explain                 -> Letzte Query erklaeren\n";
                 std::cout << "  format <table|csv|json>  -> SQL-Output-Format\n";
                 std::cout << "  exit                    -> Beenden\n";
                 continue;
@@ -928,6 +1274,126 @@ int main(int argc, char **argv) {
                     std::cout << "focus=" << focus_x << "," << focus_y << " radius=" << radius << "\n";
                 } else {
                     std::cout << "focus=none radius=" << radius << "\n";
+                }
+                continue;
+            }
+            if (line == "limit") {
+                if (world.default_limit < 0) {
+                    std::cout << "limit=off\n";
+                } else {
+                    std::cout << "limit=" << world.default_limit << "\n";
+                }
+                continue;
+            }
+            if (line.rfind("limit ", 0) == 0) {
+                std::string arg = trim_ws(line.substr(6));
+                if (arg == "off") {
+                    world.default_limit = -1;
+                } else {
+                    try {
+                        world.default_limit = std::stoi(arg);
+                    } catch (...) {
+                        std::cout << "Ungueltiger Limit-Wert.\n";
+                        continue;
+                    }
+                }
+                std::cout << "limit=" << (world.default_limit < 0 ? std::string("off") : std::to_string(world.default_limit)) << "\n";
+                continue;
+            }
+            if (line == "show") {
+                if (!global_show_enabled || global_show.empty()) {
+                    std::cout << "show=off\n";
+                } else {
+                    std::cout << "show=";
+                    for (size_t i = 0; i < global_show.size(); ++i) {
+                        if (i > 0) std::cout << ",";
+                        std::cout << global_show[i];
+                    }
+                    std::cout << "\n";
+                }
+                continue;
+            }
+            if (line.rfind("show ", 0) == 0) {
+                std::string cols = trim_ws(line.substr(5));
+                if (cols == "off") {
+                    global_show_enabled = false;
+                    global_show.clear();
+                    std::cout << "show=off\n";
+                    continue;
+                }
+                global_show.clear();
+                std::stringstream ss(cols);
+                std::string item;
+                while (std::getline(ss, item, ',')) {
+                    std::string v = trim_ws(item);
+                    if (!v.empty() && v != "*") {
+                        global_show.push_back(v);
+                    }
+                }
+                global_show_enabled = !global_show.empty();
+                std::cout << "show=" << (global_show_enabled ? "on" : "off") << "\n";
+                continue;
+            }
+            if (line.rfind("describe ", 0) == 0) {
+                std::string tname = trim_ws(line.substr(9));
+                int table_id = db_find_table(world, tname);
+                if (table_id < 0) {
+                    std::cout << "Tabelle nicht gefunden.\n";
+                    continue;
+                }
+                std::vector<std::string> cols;
+                if (table_id >= 0 && table_id < static_cast<int>(world.table_columns.size())) {
+                    cols = world.table_columns[static_cast<size_t>(table_id)];
+                }
+                if (cols.empty()) {
+                    for (const auto &p : world.payloads) {
+                        if (p.table_id == table_id) {
+                            int64_t key = db_payload_key(p.table_id, p.id);
+                            if (world.tombstones.find(key) != world.tombstones.end()) continue;
+                            if (!p.is_delta && world.delta_index_by_key.find(key) != world.delta_index_by_key.end()) continue;
+                            for (const auto &f : p.fields) {
+                                cols.push_back(f.name);
+                            }
+                            break;
+                        }
+                    }
+                }
+                std::cout << "schema " << world.table_names[static_cast<size_t>(table_id)] << ":\n";
+                for (const auto &c : cols) {
+                    std::cout << "- " << c;
+                    std::string col_lower = c;
+                    for (char &ch : col_lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    std::string tbl_lower = world.table_names[static_cast<size_t>(table_id)];
+                    for (char &ch : tbl_lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    if (col_lower == "id" || col_lower == tbl_lower + "id" || col_lower == tbl_lower + "_id") {
+                        std::cout << " [pk]";
+                    } else if (col_lower.size() >= 2 && (col_lower.rfind("id") == col_lower.size() - 2 ||
+                                                         (col_lower.size() >= 3 && col_lower.rfind("_id") == col_lower.size() - 3))) {
+                        std::string fk_table = col_lower;
+                        if (fk_table.rfind("_id") == fk_table.size() - 3) {
+                            fk_table = fk_table.substr(0, fk_table.size() - 3);
+                        } else if (fk_table.rfind("id") == fk_table.size() - 2) {
+                            fk_table = fk_table.substr(0, fk_table.size() - 2);
+                        }
+                        if (!fk_table.empty()) {
+                            std::cout << " [fk->" << fk_table << "]";
+                        }
+                    }
+                    std::cout << "\n";
+                }
+                bool printed = false;
+                for (const auto &p : world.payloads) {
+                    if (p.table_id != table_id) continue;
+                    int64_t key = db_payload_key(p.table_id, p.id);
+                    if (world.tombstones.find(key) != world.tombstones.end()) continue;
+                    if (!p.is_delta && world.delta_index_by_key.find(key) != world.delta_index_by_key.end()) continue;
+                    if (p.fields.empty()) continue;
+                    std::cout << "example: " << p.raw_data << "\n";
+                    printed = true;
+                    break;
+                }
+                if (!printed) {
+                    std::cout << "example: (keine Daten)\n";
                 }
                 continue;
             }
@@ -1144,6 +1610,27 @@ int main(int argc, char **argv) {
                           << " tombstones=" << world.tombstones.size() << "\n";
                 continue;
             }
+            if (line == "delta show") {
+                std::cout << "delta=" << db_delta_count(world)
+                          << " tombstones=" << world.tombstones.size() << "\n";
+                for (const auto &pair : world.delta_index_by_key) {
+                    int idx = pair.second;
+                    if (idx < 0 || idx >= static_cast<int>(world.payloads.size())) continue;
+                    const DbPayload &p = world.payloads[static_cast<size_t>(idx)];
+                    if (p.table_id < 0 || p.table_id >= static_cast<int>(world.table_names.size())) continue;
+                    std::cout << "UPSERT table=" << world.table_names[static_cast<size_t>(p.table_id)]
+                              << " id=" << p.id << " data=\"" << p.raw_data << "\"\n";
+                }
+                for (const auto &key : world.tombstones) {
+                    int table_id = static_cast<int>(key >> 32);
+                    int id = static_cast<int>(key & 0xffffffff);
+                    std::string tname = (table_id >= 0 && table_id < static_cast<int>(world.table_names.size()))
+                                            ? world.table_names[static_cast<size_t>(table_id)]
+                                            : "unknown";
+                    std::cout << "DELETE table=" << tname << " id=" << id << "\n";
+                }
+                continue;
+            }
             if (line == "merge") {
                 std::string merge_error;
                 if (!db_merge_delta(world, merge_cfg, merge_error)) {
@@ -1151,6 +1638,117 @@ int main(int argc, char **argv) {
                 } else {
                     std::cout << "merge_ok\n";
                 }
+                continue;
+            }
+            if (line.rfind("merge auto ", 0) == 0) {
+                std::string v = trim_ws(line.substr(11));
+                int n = 0;
+                try { n = std::stoi(v); } catch (...) { n = -1; }
+                if (n < 0) {
+                    std::cout << "Ungueltiger Wert.\n";
+                    continue;
+                }
+                auto_merge_threshold = n;
+                std::cout << "merge_auto=" << auto_merge_threshold << "\n";
+                continue;
+            }
+            if (line == "undo") {
+                std::string undo_error;
+                if (!db_undo_last_delta(world, undo_error)) {
+                    std::cout << "undo_error: " << undo_error << "\n";
+                } else {
+                    std::cout << "undo_ok\n";
+                }
+                continue;
+            }
+            if (line == "explain") {
+                if (last_query.text.empty()) {
+                    std::cout << "Kein Query vorhanden.\n";
+                    continue;
+                }
+                std::cout << "query=" << last_query.text << "\n";
+                std::cout << "scope=" << (last_query.local ? "local" : "global") << "\n";
+                std::cout << "hits=" << last_query.hits << "\n";
+                std::cout << "radius=" << radius << "\n";
+                if (last_query.fallback_global) {
+                    std::cout << "fallback_global=1\n";
+                }
+                continue;
+            }
+            if (line.rfind("export ", 0) == 0) {
+                std::string rest = trim_ws(line.substr(7));
+                size_t sp = rest.find(' ');
+                if (sp == std::string::npos) {
+                    std::cout << "export <csv|json> <path>\n";
+                    continue;
+                }
+                std::string fmt = trim_ws(rest.substr(0, sp));
+                std::string path = trim_ws(rest.substr(sp + 1));
+                if (fmt != "csv" && fmt != "json") {
+                    std::cout << "Ungueltiges Format.\n";
+                    continue;
+                }
+                if (!last_sql_valid) {
+                    std::cout << "Kein Result vorhanden.\n";
+                    continue;
+                }
+                std::string data = serialize_sql_result(last_sql_result, fmt);
+                std::ofstream out(path, std::ios::binary);
+                if (!out.is_open()) {
+                    std::cout << "Export fehlgeschlagen.\n";
+                    continue;
+                }
+                out << data;
+                std::cout << "export_ok\n";
+                continue;
+            }
+            if (line.rfind("ingest ", 0) == 0) {
+                std::string rest = trim_ws(line.substr(7));
+                if (rest.empty()) {
+                    std::cout << "ingest <sql_path> [rules_path]\n";
+                    continue;
+                }
+                std::vector<std::string> parts;
+                std::stringstream ss(rest);
+                std::string part;
+                while (ss >> part) {
+                    parts.push_back(part);
+                }
+                if (parts.empty()) {
+                    std::cout << "ingest <sql_path> [rules_path]\n";
+                    continue;
+                }
+                const std::string &sql_path = parts[0];
+                std::string rules_path;
+                if (parts.size() >= 2) {
+                    rules_path = parts[1];
+                } else {
+                    rules_path = merge_cfg.rules_path;
+                }
+                DbWorld new_world;
+                new_world.width = world.width > 0 ? world.width : 2048;
+                new_world.height = world.height > 0 ? world.height : 2048;
+                std::string ingest_error;
+                if (!db_load_sql(sql_path, new_world, ingest_error)) {
+                    std::cout << "Ingest-Fehler: " << ingest_error << "\n";
+                    continue;
+                }
+                DbIngestConfig ingest_cfg = merge_cfg;
+                ingest_cfg.rules_path = rules_path;
+                if (!db_run_ingest(new_world, ingest_cfg, ingest_error)) {
+                    std::cout << "Ingest-Fehler: " << ingest_error << "\n";
+                    continue;
+                }
+                world = std::move(new_world);
+                focus_set = false;
+                focus_x = 0;
+                focus_y = 0;
+                last_sql_result = DbSqlResult{};
+                last_sql_original = DbSqlResult{};
+                last_sql_valid = false;
+                last_query = LastQueryInfo{};
+                std::cout << "ingest_ok payloads=" << world.payloads.size()
+                          << " tables=" << world.table_names.size() << "\n";
                 continue;
             }
             if (line.rfind("schema ", 0) == 0) {
@@ -1189,30 +1787,85 @@ int main(int argc, char **argv) {
             }
             if (line.rfind("sql ", 0) == 0) {
                 std::string sql = trim_ws(line.substr(4));
-                DbSqlResult result;
-                std::string sql_error;
-                if (!db_execute_sql(world, sql, focus_set, focus_x, focus_y, radius, result, sql_error)) {
-                    std::cout << "SQL-Fehler: " << sql_error << "\n";
-                    continue;
+                std::vector<std::string> statements;
+                {
+                    std::string cur;
+                    bool in_string = false;
+                    char quote = 0;
+                    for (size_t i = 0; i < sql.size(); ++i) {
+                        char c = sql[i];
+                        if ((c == '\'' || c == '"') && (!in_string || c == quote)) {
+                            if (in_string && c == quote) {
+                                in_string = false;
+                            } else if (!in_string) {
+                                in_string = true;
+                                quote = c;
+                            }
+                        }
+                        if (!in_string && c == ';') {
+                            std::string stmt = trim_ws(cur);
+                            if (!stmt.empty()) statements.push_back(stmt);
+                            cur.clear();
+                            continue;
+                        }
+                        cur.push_back(c);
+                    }
+                    std::string stmt = trim_ws(cur);
+                    if (!stmt.empty()) statements.push_back(stmt);
                 }
-                last_sql_result = result;
-                last_sql_original = result;
-                last_sql_valid = true;
-                print_sql_result(result, shell_format);
-                if (opts.db_merge_threshold > 0) {
-                    std::string lower_sql = sql;
-                    for (char &c : lower_sql) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                    if (lower_sql.rfind("insert", 0) == 0 || lower_sql.rfind("update", 0) == 0 ||
-                        lower_sql.rfind("delete", 0) == 0) {
-                        if (db_delta_count(world) >= static_cast<size_t>(opts.db_merge_threshold)) {
-                            std::string merge_error;
-                            if (!db_merge_delta(world, merge_cfg, merge_error)) {
-                                std::cout << "merge_error: " << merge_error << "\n";
-                            } else {
-                                std::cout << "merge_ok\n";
+                for (size_t si = 0; si < statements.size(); ++si) {
+                    DbSqlResult result;
+                    std::string sql_error;
+                    long long duration_ms = 0;
+                    if (world.default_limit < 0 && sql_selects_all_no_limit(statements[si])) {
+                        std::cout << "WARNUNG: SELECT * ohne LIMIT/OFFSET kann bei grossen Tabellen sehr langsam sein "
+                                  << "oder das System instabil machen.\n"
+                                  << "Empfehlung: nutze LIMIT/OFFSET oder Paging.\n"
+                                  << "Trotzdem ausfuehren? (y/N) ";
+                        std::string answer;
+                        if (!std::getline(std::cin, answer)) {
+                            break;
+                        }
+                        answer = lower_copy(trim_ws(answer));
+                        if (answer != "y" && answer != "yes") {
+                            std::cout << "abgebrochen.\n";
+                            continue;
+                        }
+                    }
+                    const auto start = std::chrono::steady_clock::now();
+                    if (!db_execute_sql(world, statements[si], focus_set, focus_x, focus_y, radius, result, sql_error)) {
+                        std::cout << "SQL-Fehler: " << sql_error << "\n";
+                        break;
+                    }
+                    apply_limit(result);
+                    const auto end = std::chrono::steady_clock::now();
+                    duration_ms =
+                      std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                    last_sql_result = result;
+                    last_sql_original = result;
+                    last_sql_valid = true;
+                    print_sql_result(result, shell_format);
+                    last_query.text = "sql " + statements[si];
+                    last_query.is_sql = true;
+                    last_query.local = focus_set;
+                    last_query.fallback_global = false;
+                    last_query.hits = static_cast<int>(result.rows.size());
+                    if (auto_merge_threshold > 0) {
+                        std::string lower_sql = statements[si];
+                        for (char &c : lower_sql) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        if (lower_sql.rfind("insert", 0) == 0 || lower_sql.rfind("update", 0) == 0 ||
+                            lower_sql.rfind("delete", 0) == 0) {
+                            if (db_delta_count(world) >= static_cast<size_t>(auto_merge_threshold)) {
+                                std::string merge_error;
+                                if (!db_merge_delta(world, merge_cfg, merge_error)) {
+                                    std::cout << "merge_error: " << merge_error << "\n";
+                                } else {
+                                    std::cout << "merge_ok\n";
+                                }
                             }
                         }
                     }
+                    print_duration(duration_ms);
                 }
                 continue;
             }
@@ -1254,6 +1907,8 @@ int main(int argc, char **argv) {
             }
             std::vector<int> hits;
             bool used_focus = false;
+            bool fallback_global = false;
+            long long duration_ms = -1;
 
             auto run_query = [&](const DbQuery &q) {
                 if (focus_set) {
@@ -1264,9 +1919,7 @@ int main(int argc, char **argv) {
                 }
                 if (used_focus && hits.empty()) {
                     hits = db_execute_query(world, q, radius);
-                    std::cout << "hits=" << hits.size() << " (fallback_global)\n";
-                } else {
-                    std::cout << "hits=" << hits.size() << "\n";
+                    fallback_global = true;
                 }
             };
 
@@ -1275,6 +1928,7 @@ int main(int argc, char **argv) {
                     std::cout << "Ungueltige Query.\n";
                     continue;
                 }
+                const auto start = std::chrono::steady_clock::now();
                 DbQuery query;
                 size_t eq = cond.find('=');
                 if (eq == std::string::npos) {
@@ -1291,6 +1945,12 @@ int main(int argc, char **argv) {
                     query.value = trim_ws(cond.substr(eq + 1));
                 }
                 run_query(query);
+                const auto end = std::chrono::steady_clock::now();
+                duration_ms =
+                  std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                if (world.default_limit >= 0 && hits.size() > static_cast<size_t>(world.default_limit)) {
+                    hits.resize(static_cast<size_t>(world.default_limit));
+                }
             } else {
                 size_t eq = line.find('=');
                 if (eq == std::string::npos) {
@@ -1300,6 +1960,7 @@ int main(int argc, char **argv) {
                 std::string col = trim_ws(line.substr(0, eq));
                 std::string val = trim_ws(line.substr(eq + 1));
                 hits.clear();
+                const auto start = std::chrono::steady_clock::now();
                 for (const auto &tname : world.table_names) {
                     DbQuery query;
                     query.table = tname;
@@ -1323,11 +1984,25 @@ int main(int argc, char **argv) {
                         std::vector<int> local = db_execute_query(world, query, radius);
                         hits.insert(hits.end(), local.begin(), local.end());
                     }
-                    std::cout << "hits=" << hits.size() << " (fallback_global)\n";
-                } else {
-                    std::cout << "hits=" << hits.size() << "\n";
+                    fallback_global = true;
+                }
+                const auto end = std::chrono::steady_clock::now();
+                duration_ms =
+                  std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                if (world.default_limit >= 0 && hits.size() > static_cast<size_t>(world.default_limit)) {
+                    hits.resize(static_cast<size_t>(world.default_limit));
                 }
             }
+            std::cout << "hits=" << hits.size();
+            if (fallback_global) {
+                std::cout << " (fallback_global)";
+            }
+            std::cout << "\n";
+            last_query.text = line;
+            last_query.is_sql = false;
+            last_query.local = used_focus;
+            last_query.fallback_global = fallback_global;
+            last_query.hits = static_cast<int>(hits.size());
 
             std::vector<std::string> show_list;
             if (!show_cols.empty()) {
@@ -1339,6 +2014,9 @@ int main(int argc, char **argv) {
                         show_list.push_back(v);
                     }
                 }
+            }
+            if (show_list.empty() && global_show_enabled) {
+                show_list = global_show;
             }
 
             auto equals_ci = [](const std::string &a, const std::string &b) {
@@ -1415,9 +2093,13 @@ int main(int argc, char **argv) {
                 shortcut_result.rows.push_back(std::move(row));
             }
 
+            apply_limit(shortcut_result);
             last_sql_result = shortcut_result;
             last_sql_original = shortcut_result;
             last_sql_valid = !shortcut_result.rows.empty();
+            if (duration_ms >= 0) {
+                print_duration(duration_ms);
+            }
         }
         return 0;
     }

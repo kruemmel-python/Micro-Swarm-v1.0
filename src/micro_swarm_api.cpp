@@ -20,6 +20,7 @@
 #include "sim/mycel.h"
 #include "sim/params.h"
 #include "sim/rng.h"
+#include "sim/db_sql.h"
 
 namespace {
 struct MicroSwarmContext {
@@ -65,7 +66,55 @@ struct MicroSwarmDbContext {
     DbWorld world;
     std::vector<int> last_results;
     std::string last_error;
+    DbSqlResult last_sql_result;
+    bool last_sql_valid = false;
+    std::vector<std::string> delta_entries;
+    std::vector<std::string> tombstone_entries;
+    bool delta_cache_valid = false;
 };
+
+int copy_string(char *dst, int dst_size, const std::string &value) {
+    if (!dst || dst_size <= 0) return 0;
+    if (value.empty()) {
+        dst[0] = '\0';
+        return 1;
+    }
+    int copy_len = std::min(dst_size - 1, static_cast<int>(value.size()));
+    std::memcpy(dst, value.data(), static_cast<size_t>(copy_len));
+    dst[copy_len] = '\0';
+    return 1;
+}
+
+void invalidate_delta_cache(MicroSwarmDbContext *ctx) {
+    if (!ctx) return;
+    ctx->delta_cache_valid = false;
+}
+
+void build_delta_cache(MicroSwarmDbContext *ctx) {
+    if (!ctx) return;
+    ctx->delta_entries.clear();
+    ctx->tombstone_entries.clear();
+    const DbWorld &world = ctx->world;
+    for (const auto &pair : world.delta_index_by_key) {
+        int idx = pair.second;
+        if (idx < 0 || idx >= static_cast<int>(world.payloads.size())) continue;
+        const DbPayload &p = world.payloads[static_cast<size_t>(idx)];
+        if (p.table_id < 0 || p.table_id >= static_cast<int>(world.table_names.size())) continue;
+        std::string entry = "UPSERT table=" + world.table_names[static_cast<size_t>(p.table_id)] +
+                            " id=" + std::to_string(p.id) +
+                            " data=\"" + p.raw_data + "\"";
+        ctx->delta_entries.push_back(entry);
+    }
+    for (const auto &key : world.tombstones) {
+        int table_id = static_cast<int>(key >> 32);
+        int id = static_cast<int>(key & 0xffffffff);
+        std::string tname = (table_id >= 0 && table_id < static_cast<int>(world.table_names.size()))
+                                ? world.table_names[static_cast<size_t>(table_id)]
+                                : "unknown";
+        ctx->tombstone_entries.push_back("DELETE table=" + tname + " id=" + std::to_string(id));
+    }
+    ctx->delta_cache_valid = true;
+}
 
 std::array<SpeciesProfile, 4> default_species_profiles() {
     std::array<SpeciesProfile, 4> profiles;
@@ -1089,6 +1138,7 @@ int ms_db_load_sql(ms_db_handle_t *h, const char *path) {
     if (!db_load_sql(path, ctx->world, ctx->last_error)) {
         return 0;
     }
+    invalidate_delta_cache(ctx);
     return 1;
 }
 
@@ -1109,6 +1159,7 @@ int ms_db_run_ingest(ms_db_handle_t *h, int width, int height, int agents, int s
     if (!db_run_ingest(ctx->world, cfg, ctx->last_error)) {
         return 0;
     }
+    invalidate_delta_cache(ctx);
     return 1;
 }
 
@@ -1129,6 +1180,7 @@ int ms_db_load_myco(ms_db_handle_t *h, const char *path) {
     if (!db_load_myco(path, ctx->world, ctx->last_error)) {
         return 0;
     }
+    invalidate_delta_cache(ctx);
     return 1;
 }
 
@@ -1153,6 +1205,127 @@ int ms_db_query_sql(ms_db_handle_t *h, const char *query, int radius) {
     }
     ctx->last_results = db_execute_query(ctx->world, q, radius);
     return static_cast<int>(ctx->last_results.size());
+}
+
+int ms_db_sql_exec(ms_db_handle_t *h, const char *query, int use_focus, int focus_x, int focus_y, int radius) {
+    if (!h || !query) return 0;
+    auto *ctx = reinterpret_cast<MicroSwarmDbContext *>(h);
+    ctx->last_error.clear();
+    DbSqlResult result;
+    std::string error;
+    const bool focus_enabled = use_focus != 0;
+    if (!db_execute_sql(ctx->world, query, focus_enabled, focus_x, focus_y, radius, result, error)) {
+        ctx->last_error = error;
+        ctx->last_sql_valid = false;
+        ctx->last_sql_result = DbSqlResult{};
+        return 0;
+    }
+    ctx->last_sql_result = std::move(result);
+    ctx->last_sql_valid = true;
+    invalidate_delta_cache(ctx);
+    return static_cast<int>(ctx->last_sql_result.rows.size());
+}
+
+int ms_db_sql_get_column_count(ms_db_handle_t *h) {
+    if (!h) return 0;
+    auto *ctx = reinterpret_cast<MicroSwarmDbContext *>(h);
+    if (!ctx->last_sql_valid) return 0;
+    return static_cast<int>(ctx->last_sql_result.columns.size());
+}
+
+int ms_db_sql_get_column_name(ms_db_handle_t *h, int index, char *dst, int dst_size) {
+    if (!h) return 0;
+    auto *ctx = reinterpret_cast<MicroSwarmDbContext *>(h);
+    if (!ctx->last_sql_valid) return 0;
+    if (index < 0 || index >= static_cast<int>(ctx->last_sql_result.columns.size())) return 0;
+    return copy_string(dst, dst_size, ctx->last_sql_result.columns[static_cast<size_t>(index)]);
+}
+
+int ms_db_sql_get_row_count(ms_db_handle_t *h) {
+    if (!h) return 0;
+    auto *ctx = reinterpret_cast<MicroSwarmDbContext *>(h);
+    if (!ctx->last_sql_valid) return 0;
+    return static_cast<int>(ctx->last_sql_result.rows.size());
+}
+
+int ms_db_sql_get_cell(ms_db_handle_t *h, int row, int col, char *dst, int dst_size) {
+    if (!h) return 0;
+    auto *ctx = reinterpret_cast<MicroSwarmDbContext *>(h);
+    if (!ctx->last_sql_valid) return 0;
+    if (row < 0 || row >= static_cast<int>(ctx->last_sql_result.rows.size())) return 0;
+    const auto &r = ctx->last_sql_result.rows[static_cast<size_t>(row)];
+    if (col < 0 || col >= static_cast<int>(r.size())) {
+        return copy_string(dst, dst_size, "");
+    }
+    return copy_string(dst, dst_size, r[static_cast<size_t>(col)]);
+}
+
+int ms_db_merge_delta(ms_db_handle_t *h, int agents, int steps, uint32_t seed) {
+    if (!h) return 0;
+    auto *ctx = reinterpret_cast<MicroSwarmDbContext *>(h);
+    ctx->last_error.clear();
+    DbIngestConfig cfg;
+    cfg.agent_count = agents;
+    cfg.steps = steps;
+    cfg.seed = seed;
+    std::string error;
+    if (!db_merge_delta(ctx->world, cfg, error)) {
+        ctx->last_error = error;
+        return 0;
+    }
+    invalidate_delta_cache(ctx);
+    return 1;
+}
+
+int ms_db_undo_last_delta(ms_db_handle_t *h) {
+    if (!h) return 0;
+    auto *ctx = reinterpret_cast<MicroSwarmDbContext *>(h);
+    ctx->last_error.clear();
+    std::string error;
+    if (!db_undo_last_delta(ctx->world, error)) {
+        ctx->last_error = error;
+        return 0;
+    }
+    invalidate_delta_cache(ctx);
+    return 1;
+}
+
+int ms_db_get_delta_count(ms_db_handle_t *h) {
+    if (!h) return 0;
+    auto *ctx = reinterpret_cast<MicroSwarmDbContext *>(h);
+    if (!ctx->delta_cache_valid) {
+        build_delta_cache(ctx);
+    }
+    return static_cast<int>(ctx->delta_entries.size());
+}
+
+int ms_db_get_tombstone_count(ms_db_handle_t *h) {
+    if (!h) return 0;
+    auto *ctx = reinterpret_cast<MicroSwarmDbContext *>(h);
+    if (!ctx->delta_cache_valid) {
+        build_delta_cache(ctx);
+    }
+    return static_cast<int>(ctx->tombstone_entries.size());
+}
+
+int ms_db_get_delta_entry(ms_db_handle_t *h, int index, char *dst, int dst_size) {
+    if (!h) return 0;
+    auto *ctx = reinterpret_cast<MicroSwarmDbContext *>(h);
+    if (!ctx->delta_cache_valid) {
+        build_delta_cache(ctx);
+    }
+    if (index < 0 || index >= static_cast<int>(ctx->delta_entries.size())) return 0;
+    return copy_string(dst, dst_size, ctx->delta_entries[static_cast<size_t>(index)]);
+}
+
+int ms_db_get_tombstone_entry(ms_db_handle_t *h, int index, char *dst, int dst_size) {
+    if (!h) return 0;
+    auto *ctx = reinterpret_cast<MicroSwarmDbContext *>(h);
+    if (!ctx->delta_cache_valid) {
+        build_delta_cache(ctx);
+    }
+    if (index < 0 || index >= static_cast<int>(ctx->tombstone_entries.size())) return 0;
+    return copy_string(dst, dst_size, ctx->tombstone_entries[static_cast<size_t>(index)]);
 }
 
 int ms_db_query_simple(ms_db_handle_t *h, const char *table, const char *column, const char *value, int radius) {

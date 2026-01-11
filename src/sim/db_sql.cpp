@@ -29,6 +29,14 @@ std::string to_lower(std::string s) {
     return s;
 }
 
+std::string trim(const std::string &s) {
+    size_t start = 0;
+    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) start++;
+    size_t end = s.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1]))) end--;
+    return s.substr(start, end - start);
+}
+
 bool ieq(const std::string &a, const std::string &b) {
     if (a.size() != b.size()) return false;
     for (size_t i = 0; i < a.size(); ++i) {
@@ -65,6 +73,13 @@ std::vector<Token> tokenize(const std::string &sql) {
             i++;
             while (i < sql.size()) {
                 char x = sql[i];
+                // FIX: Escape-Handling für Backslashes in der Shell
+                if (x == '\\' && i + 1 < sql.size()) {
+                    val.push_back(x);
+                    val.push_back(sql[i + 1]);
+                    i += 2;
+                    continue;
+                }
                 if (x == q) {
                     if (i + 1 < sql.size() && sql[i + 1] == q) {
                         val.push_back(q);
@@ -164,6 +179,7 @@ struct JoinClause {
 
 struct SqlQuery {
     bool distinct = false;
+    std::vector<std::string> distinct_on;
     std::vector<SelectItem> select_items;
     std::string from_table;
     std::string from_alias;
@@ -172,7 +188,12 @@ struct SqlQuery {
     std::unique_ptr<Expr> where_expr;
     std::vector<std::string> group_by;
     std::unique_ptr<Expr> having_expr;
-    std::vector<std::pair<std::string, bool>> order_by;
+    struct OrderBy {
+        std::string key;
+        bool asc = true;
+        bool nulls_last = false;
+    };
+    std::vector<OrderBy> order_by;
     int limit = -1;
     int offset = 0;
 };
@@ -198,7 +219,24 @@ bool parse_select_list(Parser &p, std::vector<SelectItem> &out) {
         } else {
             std::string name = p.consume();
             std::string lower = to_lower(name);
-            if (!p.eof() && p.peek() == "(") {
+            if (lower == "case") {
+                std::string expr = name;
+                int depth = 0;
+                while (!p.eof()) {
+                    std::string tok = p.consume();
+                    if (ieq(tok, "case")) depth++;
+                    if (ieq(tok, "end")) {
+                        expr += " " + tok;
+                        if (depth == 0) break;
+                        depth--;
+                        continue;
+                    }
+                    expr += " " + tok;
+                }
+                item.kind = SelectItem::FUNC;
+                item.raw = expr;
+                item.column = expr;
+            } else if (!p.eof() && p.peek() == "(") {
                 p.consume();
                 std::string arglist;
                 int depth = 1;
@@ -473,7 +511,19 @@ bool parse_query(const std::string &sql, SqlQuery &out) {
         return false;
     }
     if (p.match("distinct")) {
-        out.distinct = true;
+        if (p.match("on")) {
+            if (!p.match_symbol("(")) return false;
+            while (!p.eof()) {
+                std::string col = p.consume();
+                if (col.empty()) return false;
+                out.distinct_on.push_back(col);
+                if (p.match_symbol(",")) continue;
+                if (p.match_symbol(")")) break;
+                return false;
+            }
+        } else {
+            out.distinct = true;
+        }
     }
     if (!parse_select_list(p, out.select_items)) return false;
     if (!p.match("from")) return false;
@@ -557,10 +607,20 @@ bool parse_query(const std::string &sql, SqlQuery &out) {
         if (!p.match("by")) return false;
         while (!p.eof()) {
             std::string col = p.consume();
-            bool asc = true;
-            if (p.match("asc")) asc = true;
-            else if (p.match("desc")) asc = false;
-            out.order_by.push_back({col, asc});
+            SqlQuery::OrderBy ob;
+            ob.key = col;
+            if (p.match("asc")) ob.asc = true;
+            else if (p.match("desc")) ob.asc = false;
+            if (p.match("nulls")) {
+                if (p.match("last")) {
+                    ob.nulls_last = true;
+                } else if (p.match("first")) {
+                    ob.nulls_last = false;
+                } else {
+                    return false;
+                }
+            }
+            out.order_by.push_back(ob);
             if (p.match_symbol(",")) continue;
             break;
         }
@@ -576,7 +636,7 @@ bool parse_query(const std::string &sql, SqlQuery &out) {
 
 struct Cell {
     std::string text;
-    bool is_null = false;
+    bool is_null = true;
     bool has_number = false;
     double number = 0.0;
 };
@@ -752,8 +812,70 @@ Cell eval_function(const std::string &raw, const Row &row, const Row *outer) {
         if (!a.empty() && (a.front() == '\'' || a.front() == '"')) {
             return make_cell(strip_quotes(a), false);
         }
+        double num = 0.0;
+        if (parse_number(a, num)) {
+            return make_cell(a, false);
+        }
+        if (a.find('(') != std::string::npos && a.back() == ')') {
+            return eval_function(a, row, outer);
+        }
         return get_value(row, outer, a);
     };
+    if (fname == "coalesce") {
+        for (const auto &a : args) {
+            Cell c = eval_arg(a);
+            if (!c.is_null && !c.text.empty()) return c;
+        }
+        return Cell{"", true, false, 0.0};
+    }
+    if (fname == "ifnull") {
+        if (args.size() < 2) return Cell{"", true, false, 0.0};
+        Cell c = eval_arg(args[0]);
+        if (!c.is_null && !c.text.empty()) return c;
+        return eval_arg(args[1]);
+    }
+    if (fname == "nullif") {
+        if (args.size() < 2) return Cell{"", true, false, 0.0};
+        Cell a = eval_arg(args[0]);
+        Cell b = eval_arg(args[1]);
+        if (a.text == b.text) return Cell{"", true, false, 0.0};
+        return a;
+    }
+    if (fname == "to_int") {
+        if (args.empty()) return Cell{"", true, false, 0.0};
+        Cell c = eval_arg(args[0]);
+        double num = 0.0;
+        if (!parse_number(c.text, num)) return Cell{"", true, false, 0.0};
+        return make_cell(std::to_string(static_cast<int>(num)), false);
+    }
+    if (fname == "to_float") {
+        if (args.empty()) return Cell{"", true, false, 0.0};
+        Cell c = eval_arg(args[0]);
+        double num = 0.0;
+        if (!parse_number(c.text, num)) return Cell{"", true, false, 0.0};
+        return make_cell(std::to_string(num), false);
+    }
+    if (fname == "cast") {
+        std::string args_lower = to_lower(args_str);
+        size_t as_pos = args_lower.find(" as ");
+        if (as_pos == std::string::npos) {
+            return Cell{"", true, false, 0.0};
+        }
+        std::string left = trim(args_str.substr(0, as_pos));
+        std::string type = trim(args_lower.substr(as_pos + 4));
+        Cell c = eval_arg(left);
+        if (type == "int" || type == "integer") {
+            double num = 0.0;
+            if (!parse_number(c.text, num)) return Cell{"", true, false, 0.0};
+            return make_cell(std::to_string(static_cast<int>(num)), false);
+        }
+        if (type == "float" || type == "real" || type == "double") {
+            double num = 0.0;
+            if (!parse_number(c.text, num)) return Cell{"", true, false, 0.0};
+            return make_cell(std::to_string(num), false);
+        }
+        return make_cell(c.text, c.is_null);
+    }
     if (fname == "lower") {
         if (args.empty()) return Cell{"", true, false, 0.0};
         Cell c = eval_arg(args[0]);
@@ -803,12 +925,146 @@ Cell eval_function(const std::string &raw, const Row &row, const Row *outer) {
     return Cell{"", true, false, 0.0};
 }
 
+bool eval_case_condition(const std::vector<Token> &tokens,
+                         size_t start,
+                         size_t end,
+                         const Row &row,
+                         const Row *outer) {
+    if (start >= end) return false;
+    std::vector<std::string> parts;
+    for (size_t i = start; i < end; ++i) {
+        parts.push_back(tokens[i].text);
+    }
+    if (parts.size() >= 3 && ieq(parts[1], "is")) {
+        bool is_not = false;
+        size_t idx = 2;
+        if (idx < parts.size() && ieq(parts[idx], "not")) {
+            is_not = true;
+            idx++;
+        }
+        if (idx < parts.size() && ieq(parts[idx], "null")) {
+            Cell c = get_value(row, outer, parts[0]);
+            bool is_null = c.is_null;
+            return is_not ? !is_null : is_null;
+        }
+    }
+    if (parts.size() < 3) return false;
+    std::string lhs = parts[0];
+    std::string op = to_lower(parts[1]);
+    std::string rhs = parts[2];
+    Cell a = get_value(row, outer, lhs);
+    Cell b;
+    if (!rhs.empty() && (rhs.front() == '\'' || rhs.front() == '"')) {
+        b = make_cell(strip_quotes(rhs), false);
+    } else {
+        b = get_value(row, outer, rhs);
+        if (b.is_null) {
+            b = make_cell(rhs, false);
+        }
+    }
+    double na = 0.0;
+    double nb = 0.0;
+    bool a_num = a.has_number || parse_number(a.text, na);
+    bool b_num = b.has_number || parse_number(b.text, nb);
+    if (a.has_number) na = a.number;
+    if (b.has_number) nb = b.number;
+    if (op == "=") return a.text == b.text;
+    if (op == "!=" || op == "<>") return a.text != b.text;
+    if (op == "like") return like_match(a.text, b.text);
+    if (op == "regexp") {
+        try {
+            std::regex re(b.text, std::regex::icase);
+            return std::regex_search(a.text, re);
+        } catch (...) {
+            return false;
+        }
+    }
+    if (a_num && b_num) {
+        if (op == "<") return na < nb;
+        if (op == "<=") return na <= nb;
+        if (op == ">") return na > nb;
+        if (op == ">=") return na >= nb;
+    }
+    if (op == "<") return a.text < b.text;
+    if (op == "<=") return a.text <= b.text;
+    if (op == ">") return a.text > b.text;
+    if (op == ">=") return a.text >= b.text;
+    return false;
+}
+
+Cell eval_case_expr(const std::string &raw, const Row &row, const Row *outer) {
+    Parser p;
+    p.tokens = tokenize(raw);
+    if (!p.match("case")) {
+        return Cell{"", true, false, 0.0};
+    }
+    while (!p.eof()) {
+        if (p.match("when")) {
+            size_t cond_start = p.pos;
+            while (!p.eof() && !ieq(p.peek(), "then")) {
+                p.consume();
+            }
+            size_t cond_end = p.pos;
+            if (!p.match("then")) return Cell{"", true, false, 0.0};
+            size_t val_start = p.pos;
+            while (!p.eof() && !ieq(p.peek(), "when") && !ieq(p.peek(), "else") && !ieq(p.peek(), "end")) {
+                p.consume();
+            }
+            size_t val_end = p.pos;
+            if (eval_case_condition(p.tokens, cond_start, cond_end, row, outer)) {
+                std::string val;
+                for (size_t i = val_start; i < val_end; ++i) {
+                    if (!val.empty()) val.push_back(' ');
+                    val += p.tokens[i].text;
+                }
+                if (val.empty()) return Cell{"", true, false, 0.0};
+                if (!val.empty() && (val.front() == '\'' || val.front() == '"')) {
+                    return make_cell(strip_quotes(val), false);
+                }
+                if (val.find('(') != std::string::npos && val.back() == ')') {
+                    return eval_function(val, row, outer);
+                }
+                Cell c = get_value(row, outer, val);
+                if (!c.is_null) return c;
+                return make_cell(val, false);
+            }
+            continue;
+        }
+        if (p.match("else")) {
+            std::string val;
+            while (!p.eof() && !ieq(p.peek(), "end")) {
+                if (!val.empty()) val.push_back(' ');
+                val += p.consume();
+            }
+            if (!val.empty() && (val.front() == '\'' || val.front() == '"')) {
+                return make_cell(strip_quotes(val), false);
+            }
+            if (val.find('(') != std::string::npos && val.back() == ')') {
+                return eval_function(val, row, outer);
+            }
+            Cell c = get_value(row, outer, val);
+            if (!c.is_null) return c;
+            return make_cell(val, false);
+        }
+        if (p.match("end")) {
+            break;
+        }
+        p.consume();
+    }
+    return Cell{"", true, false, 0.0};
+}
+
 Cell eval_value(const Expr *expr, const Row &row, const Row *outer) {
     if (!expr) return Cell{"", true, false, 0.0};
     if (expr->kind == Expr::VALUE) {
         std::string raw = expr->value;
         if (!raw.empty() && (raw.front() == '\'' || raw.front() == '"')) {
             return make_cell(strip_quotes(raw), false);
+        }
+        std::string lower = to_lower(raw);
+        if (lower.rfind("case", 0) == 0 && lower.size() >= 3 &&
+            lower.find(" end") != std::string::npos) {
+            return eval_case_expr(raw, row, outer);
         }
         double num = 0.0;
         if (parse_number(raw, num)) {
@@ -828,16 +1084,25 @@ Cell eval_value(const Expr *expr, const Row &row, const Row *outer) {
 
 bool compare_cells(const Cell &a, const Cell &b, const std::string &op) {
     if (a.is_null || b.is_null) return false;
-    if (a.has_number && b.has_number) {
-        if (op == "=") return a.number == b.number;
-        if (op == "!=" || op == "<>") return a.number != b.number;
-        if (op == "<") return a.number < b.number;
-        if (op == "<=") return a.number <= b.number;
-        if (op == ">") return a.number > b.number;
-        if (op == ">=") return a.number >= b.number;
+    
+    double na, nb;
+    bool a_num = a.has_number || parse_number(a.text, na);
+    bool b_num = b.has_number || parse_number(b.text, nb);
+    if (a.has_number) na = a.number;
+    if (b.has_number) nb = b.number;
+
+    if (a_num && b_num) {
+        if (op == "=") return std::abs(na - nb) < 1e-9;
+        if (op == "!=" || op == "<>") return std::abs(na - nb) > 1e-9;
+        if (op == "<") return na < nb;
+        if (op == "<=") return na <= nb;
+        if (op == ">") return na > nb;
+        if (op == ">=") return na >= nb;
     }
-    if (op == "=") return a.text == b.text;
-    if (op == "!=" || op == "<>") return a.text != b.text;
+    
+    // Fallback auf String-Vergleich
+    if (op == "=") return ieq(a.text, b.text);
+    if (op == "!=" || op == "<>") return !ieq(a.text, b.text);
     if (op == "<") return a.text < b.text;
     if (op == "<=") return a.text <= b.text;
     if (op == ">") return a.text > b.text;
@@ -863,7 +1128,7 @@ bool eval_expr(const Expr *expr,
             return eval_expr(expr->lhs.get(), row, outer, world, use_focus, focus_x, focus_y, radius, error) ||
                    eval_expr(expr->rhs.get(), row, outer, world, use_focus, focus_x, focus_y, radius, error);
         case Expr::NOT:
-            return !eval_expr(expr->lhs.get(), row, outer, world, use_focus, focus_x, focus_y, radius, error);
+			return !eval_expr(expr->lhs.get(), row, outer, world, use_focus, focus_x, focus_y, radius, error);
         case Expr::COMPARE: {
             Cell a = eval_value(expr->lhs.get(), row, outer);
             Cell b = eval_value(expr->rhs.get(), row, outer);
@@ -937,9 +1202,14 @@ bool eval_expr(const Expr *expr,
             bool is_null = a.is_null || a.text.empty();
             return expr->negate ? !is_null : is_null;
         }
-        case Expr::VALUE:
-            return true;
-    }
+		case Expr::VALUE: {
+			Cell v = eval_value(expr, row, outer);
+			if (v.is_null) return false;
+			if (v.has_number) return std::abs(v.number) > 1e-9;
+			std::string s = to_lower(v.text);
+			return !s.empty() && s != "0" && s != "false" && s != "null";
+		}
+	}
     return true;
 }
 
@@ -1043,30 +1313,31 @@ std::string make_group_key(const Row &row, const Row *outer, const std::vector<s
     return key;
 }
 
-std::string resolve_order_value(const std::vector<std::string> &columns,
-                                const std::vector<std::string> &row_values,
-                                const Row &row_meta,
-                                const Row *outer,
-                                const std::string &key) {
+Cell resolve_order_cell(const std::vector<std::string> &columns,
+                        const std::vector<std::string> &row_values,
+                        const Row &row_meta,
+                        const Row *outer,
+                        const std::string &key) {
     bool digits = !key.empty() && std::all_of(key.begin(), key.end(), [](unsigned char c) { return c >= '0' && c <= '9'; });
     if (digits) {
         int idx = std::stoi(key);
         if (idx > 0 && static_cast<size_t>(idx) <= row_values.size()) {
-            return row_values[static_cast<size_t>(idx - 1)];
+            return make_cell(row_values[static_cast<size_t>(idx - 1)], false);
         }
     }
     std::string key_lower = to_lower(key);
     for (size_t i = 0; i < columns.size(); ++i) {
         if (to_lower(columns[i]) == key_lower) {
-            if (i < row_values.size()) return row_values[i];
+            if (i < row_values.size()) {
+                return make_cell(row_values[i], false);
+            }
             break;
         }
     }
-    Cell c = get_cell_by_name(row_meta, outer, key);
-    return c.is_null ? "" : c.text;
+    return get_cell_by_name(row_meta, outer, key);
 }
 
-bool apply_order(const std::vector<std::pair<std::string, bool>> &order_by,
+bool apply_order(const std::vector<SqlQuery::OrderBy> &order_by,
                  const std::vector<std::string> &columns,
                  const std::vector<std::string> &a,
                  const std::vector<std::string> &b,
@@ -1075,21 +1346,27 @@ bool apply_order(const std::vector<std::pair<std::string, bool>> &order_by,
                  const Row &meta_b,
                  const Row *outer_b) {
     for (const auto &ob : order_by) {
-        std::string va = resolve_order_value(columns, a, meta_a, outer_a, ob.first);
-        std::string vb = resolve_order_value(columns, b, meta_b, outer_b, ob.first);
+        Cell ca = resolve_order_cell(columns, a, meta_a, outer_a, ob.key);
+        Cell cb = resolve_order_cell(columns, b, meta_b, outer_b, ob.key);
+        if (ob.nulls_last && ca.is_null != cb.is_null) {
+            return ca.is_null ? false : true;
+        }
+        if (ca.is_null && cb.is_null) continue;
         double na = 0.0;
         double nb = 0.0;
-        bool a_num = parse_number(va, na);
-        bool b_num = parse_number(vb, nb);
+        bool a_num = ca.has_number || parse_number(ca.text, na);
+        bool b_num = cb.has_number || parse_number(cb.text, nb);
+        if (ca.has_number) na = ca.number;
+        if (cb.has_number) nb = cb.number;
         if (a_num && b_num) {
             if (na == nb) continue;
-            return ob.second ? (na < nb) : (na > nb);
+            return ob.asc ? (na < nb) : (na > nb);
         }
-        if (va == vb) continue;
-        if (ob.second) {
-            return va < vb;
+        if (ca.text == cb.text) continue;
+        if (ob.asc) {
+            return ca.text < cb.text;
         }
-        return va > vb;
+        return ca.text > cb.text;
     }
     return false;
 }
@@ -1217,21 +1494,34 @@ bool execute_single_sql(const DbWorld &world,
     std::vector<Row> output_meta;
 
     bool has_group = !q.group_by.empty();
+    bool has_aggregate = false;
+    bool has_nonagg_select = false;
+    for (const auto &item : q.select_items) {
+        if (item.kind == SelectItem::AGG) {
+            has_aggregate = true;
+        } else {
+            has_nonagg_select = true;
+        }
+    }
+    bool has_aggregate_only = !has_group && has_aggregate && !has_nonagg_select;
     std::vector<std::string> group_cols = q.group_by;
-    if (has_group) {
-        for (auto &gb : group_cols) {
-            for (const auto &item : q.select_items) {
-                if (!item.alias.empty() && ieq(item.alias, gb) && item.kind == SelectItem::COLUMN) {
-                    gb = item.column;
+    if (has_group || has_aggregate_only) {
+        if (has_group) {
+            for (auto &gb : group_cols) {
+                for (const auto &item : q.select_items) {
+                    if (!item.alias.empty() && ieq(item.alias, gb) && item.kind == SelectItem::COLUMN) {
+                        gb = item.column;
+                    }
                 }
             }
         }
-    }
-    if (has_group) {
         std::unordered_map<std::string, std::vector<Row>> groups;
         for (const auto &row : rows) {
             std::string key = make_group_key(row, outer, group_cols);
             groups[key].push_back(row);
+        }
+        if (has_aggregate_only && groups.empty()) {
+            groups[""] = std::vector<Row>{};
         }
         for (const auto &item : q.select_items) {
             if (item.kind == SelectItem::STAR) {
@@ -1302,10 +1592,15 @@ bool execute_single_sql(const DbWorld &world,
                         }
                     } else if (ieq(spec.func, "sum") || ieq(spec.func, "avg")) {
                         Cell c = get_cell_by_name(row, outer, spec.column);
+                        double val = 0.0;
+                        // FIX: Versuche immer zu parsen, wenn has_number false ist
                         if (c.has_number) {
-                            state.sum += c.number;
-                            state.count_num++;
+                            val = c.number;
+                        } else {
+                            parse_number(c.text, val);
                         }
+                        state.sum += val;
+                        state.count_num++;
                     } else if (ieq(spec.func, "min")) {
                         Cell c = get_cell_by_name(row, outer, spec.column);
                         update_minmax(state.min_val, c, true);
@@ -1320,10 +1615,10 @@ bool execute_single_sql(const DbWorld &world,
 
             std::vector<std::string> out_row;
             out_row.reserve(q.select_items.size());
-                for (const auto &item : q.select_items) {
-                    if (item.kind == SelectItem::AGG) {
-                        const AggState &state = agg[item.raw];
-                        if (ieq(item.func, "count")) {
+            for (const auto &item : q.select_items) {
+                if (item.kind == SelectItem::AGG) {
+                    const AggState &state = agg[item.raw];
+                    if (ieq(item.func, "count")) {
                         out_row.push_back(std::to_string(state.count));
                         agg_row.values[to_lower(item.raw)] = make_cell(std::to_string(state.count), false);
                         if (!item.alias.empty()) {
@@ -1355,34 +1650,42 @@ bool execute_single_sql(const DbWorld &world,
                             agg_row.values[to_lower(item.alias)] = state.max_val;
                         }
                     }
-                    } else {
-                        Cell c = (item.kind == SelectItem::FUNC)
-                                     ? eval_function(item.raw, grows.front(), outer)
-                                     : get_cell_by_name(grows.front(), outer, item.column);
-                        out_row.push_back(c.is_null ? "" : c.text);
-                        agg_row.values[to_lower(item.column)] = c;
-                        if (!item.alias.empty()) {
-                            agg_row.values[to_lower(item.alias)] = c;
+                } else {
+                    Cell c;
+                    if (item.kind == SelectItem::FUNC) {
+                        std::string lower = to_lower(item.raw);
+                        if (lower.rfind("case", 0) == 0) {
+                            c = eval_case_expr(item.raw, grows.front(), outer);
+                        } else {
+                            c = eval_function(item.raw, grows.front(), outer);
                         }
+                    } else {
+                        c = get_cell_by_name(grows.front(), outer, item.column);
+                    }
+                    out_row.push_back(c.is_null ? "" : c.text);
+                    agg_row.values[to_lower(item.column)] = c;
+                    if (!item.alias.empty()) {
+                        agg_row.values[to_lower(item.alias)] = c;
                     }
                 }
-                for (const auto &spec : agg_specs) {
-                    const AggState &state = agg[spec.raw];
-                    std::string key = to_lower(spec.raw);
-                    if (agg_row.values.find(key) != agg_row.values.end()) continue;
-                    if (ieq(spec.func, "count")) {
-                        agg_row.values[key] = make_cell(std::to_string(state.count), false);
-                    } else if (ieq(spec.func, "sum")) {
-                        agg_row.values[key] = make_cell(std::to_string(state.sum), false);
-                    } else if (ieq(spec.func, "avg")) {
-                        double avg = (state.count_num > 0) ? (state.sum / static_cast<double>(state.count_num)) : 0.0;
-                        agg_row.values[key] = make_cell(std::to_string(avg), false);
-                    } else if (ieq(spec.func, "min")) {
-                        agg_row.values[key] = state.min_val;
-                    } else if (ieq(spec.func, "max")) {
-                        agg_row.values[key] = state.max_val;
-                    }
+            }
+            for (const auto &spec : agg_specs) {
+                const AggState &state = agg[spec.raw];
+                std::string key = to_lower(spec.raw);
+                if (agg_row.values.find(key) != agg_row.values.end()) continue;
+                if (ieq(spec.func, "count")) {
+                    agg_row.values[key] = make_cell(std::to_string(state.count), false);
+                } else if (ieq(spec.func, "sum")) {
+                    agg_row.values[key] = make_cell(std::to_string(state.sum), false);
+                } else if (ieq(spec.func, "avg")) {
+                    double avg = (state.count_num > 0) ? (state.sum / static_cast<double>(state.count_num)) : 0.0;
+                    agg_row.values[key] = make_cell(std::to_string(avg), false);
+                } else if (ieq(spec.func, "min")) {
+                    agg_row.values[key] = state.min_val;
+                } else if (ieq(spec.func, "max")) {
+                    agg_row.values[key] = state.max_val;
                 }
+            }
             if (q.having_expr && !eval_expr(q.having_expr.get(), agg_row, outer, world, use_focus, focus_x, focus_y, radius, error)) {
                 if (!error.empty()) {
                     return false;
@@ -1403,8 +1706,11 @@ bool execute_single_sql(const DbWorld &world,
         }
         if (has_star) {
             if (!rows.empty()) {
+                // FIX: Filter eingebaut UND Klammern korrekt geschlossen
                 for (const auto &pair : rows.front().values) {
-                    output_columns.push_back(pair.first);
+                    if (pair.first.find('.') == std::string::npos) {
+                        output_columns.push_back(pair.first);
+                    }
                 }
             }
         } else {
@@ -1430,9 +1736,17 @@ bool execute_single_sql(const DbWorld &world,
                         error = "Aggregates ohne GROUP BY nicht erlaubt.";
                         return false;
                     }
-                    Cell c = (item.kind == SelectItem::FUNC)
-                                 ? eval_function(item.raw, row, outer)
-                                 : get_cell_by_name(row, outer, item.column);
+                    Cell c;
+                    if (item.kind == SelectItem::FUNC) {
+                        std::string lower = to_lower(item.raw);
+                        if (lower.rfind("case", 0) == 0) {
+                            c = eval_case_expr(item.raw, row, outer);
+                        } else {
+                            c = eval_function(item.raw, row, outer);
+                        }
+                    } else {
+                        c = get_cell_by_name(row, outer, item.column);
+                    }
                     out_row.push_back(c.is_null ? "" : c.text);
                 }
             }
@@ -1483,10 +1797,35 @@ bool execute_single_sql(const DbWorld &world,
         output_meta.swap(sorted_meta);
     }
 
+    if (!q.distinct_on.empty()) {
+        std::vector<std::vector<std::string>> unique_rows;
+        std::vector<Row> unique_meta;
+        std::unordered_map<std::string, bool> seen;
+        for (size_t r = 0; r < output_rows.size(); ++r) {
+            std::string key;
+            for (const auto &col : q.distinct_on) {
+                Cell c = resolve_order_cell(output_columns, output_rows[r], output_meta[r], outer, col);
+                key += c.is_null ? "NULL" : c.text;
+                key.push_back('|');
+            }
+            if (seen.find(key) == seen.end()) {
+                seen[key] = true;
+                unique_rows.push_back(output_rows[r]);
+                unique_meta.push_back(output_meta[r]);
+            }
+        }
+        output_rows.swap(unique_rows);
+        output_meta.swap(unique_meta);
+    }
+
     int start = std::max(0, q.offset);
     int end = static_cast<int>(output_rows.size());
-    if (q.limit >= 0) {
-        end = std::min(end, start + q.limit);
+    int effective_limit = q.limit;
+    if (effective_limit < 0 && world.default_limit >= 0) {
+        effective_limit = world.default_limit;
+    }
+    if (effective_limit >= 0) {
+        end = std::min(end, start + effective_limit);
     }
     if (start > 0 || end < static_cast<int>(output_rows.size())) {
         std::vector<std::vector<std::string>> sliced;
@@ -1674,6 +2013,36 @@ bool db_execute_sql(DbWorld &world,
                   std::find_if(trimmed.begin(), trimmed.end(), [](unsigned char c) { return !std::isspace(c); }));
     std::string lower = lower_copy(trimmed);
     int rows = 0;
+    if (lower.rfind("set", 0) == 0) {
+        Parser p;
+        p.tokens = tokenize(sql);
+        if (!p.match("set")) {
+            error = "SET: ungueltig.";
+            return false;
+        }
+        if (!p.match("limit")) {
+            error = "SET: nur LIMIT unterstuetzt.";
+            return false;
+        }
+        if (p.match("off")) {
+            world.default_limit = -1;
+        } else {
+            std::string val = p.consume();
+            if (val.empty()) {
+                error = "SET LIMIT: Wert fehlt.";
+                return false;
+            }
+            try {
+                world.default_limit = std::stoi(val);
+            } catch (...) {
+                error = "SET LIMIT: ungueltiger Wert.";
+                return false;
+            }
+        }
+        out.columns = {"limit"};
+        out.rows = {{std::to_string(world.default_limit)}};
+        return true;
+    }
     if (lower.rfind("insert", 0) == 0) {
         if (!db_apply_insert_sql(world, sql, rows, error)) return false;
         out.columns = {"rows_affected"};
