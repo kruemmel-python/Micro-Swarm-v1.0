@@ -1,0 +1,1193 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MycoDB: Der Einstieg</title>
+  <style>
+    :root {
+      --bg-1: #f3fbff;
+      --bg-2: #fff5e6;
+      --ink: #0f172a;
+      --muted: #495266;
+      --accent: #0f6b88;
+      --accent-2: #ff7a18;
+      --accent-3: #22c1a7;
+      --card: #ffffff;
+      --shadow: 0 16px 40px rgba(12, 20, 40, 0.12);
+      --code-bg: #0b1220;
+      --code-ink: #e9f0ff;
+      --info-blue: #e6f3ff;
+      --info-green: #eafaf5;
+      --border: #d3e3f0;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Trebuchet MS", "Gill Sans", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 800px at 10% 8%, #dff3ff 0%, transparent 60%),
+        radial-gradient(900px 700px at 90% 15%, #ffe7c7 0%, transparent 55%),
+        radial-gradient(900px 700px at 70% 90%, #d8fff7 0%, transparent 55%),
+        linear-gradient(120deg, var(--bg-1), var(--bg-2));
+      min-height: 100vh;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 24px;
+      padding: 24px;
+    }
+
+    header {
+      grid-column: 1 / -1;
+      background: var(--card);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      border-radius: 16px;
+      padding: 22px 24px 18px;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+
+    .title h1 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: 0.2px;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 14px;
+      margin-top: 6px;
+    }
+
+    .progress {
+      margin-top: 12px;
+      height: 8px;
+      background: #e6ece8;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .progress span {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, var(--accent), var(--accent-3), var(--accent-2));
+      transition: width 0.2s ease;
+    }
+
+    nav {
+      position: sticky;
+      top: 128px;
+      align-self: start;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    nav h2 {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin: 0 0 12px;
+      color: var(--muted);
+    }
+
+    nav a {
+      display: block;
+      padding: 6px 8px;
+      border-radius: 8px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    nav a.active {
+      background: linear-gradient(90deg, #e6f7ff, #f1fff9);
+      color: var(--accent);
+      font-weight: 600;
+      border: 1px solid #cce8ff;
+    }
+
+    main {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      box-shadow: var(--shadow);
+    }
+
+    h2, h3 {
+      margin-top: 32px;
+      margin-bottom: 12px;
+    }
+
+    h2 { font-size: 22px; }
+    h3 { font-size: 18px; color: var(--accent); }
+
+    p { line-height: 1.7; color: var(--muted); }
+
+    .info-box {
+      border-left: 4px solid #1d78d6;
+      background: var(--info-blue);
+      padding: 14px 16px;
+      border-radius: 12px;
+      margin: 14px 0;
+      color: #1e3a62;
+    }
+
+    .mycodb-box {
+      border-left: 4px solid #16a34a;
+      background: var(--info-green);
+      padding: 14px 16px;
+      border-radius: 12px;
+      margin: 14px 0;
+      color: #1f4d31;
+    }
+
+    .callout {
+      border: 1px dashed var(--accent-2);
+      background: #fff2e6;
+      padding: 14px 16px;
+      border-radius: 12px;
+      margin: 16px 0;
+    }
+
+    .code-block {
+      position: relative;
+      margin: 12px 0 18px;
+    }
+
+    pre {
+      background: var(--code-bg);
+      color: var(--code-ink);
+      padding: 16px;
+      border-radius: 12px;
+      overflow-x: auto;
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: linear-gradient(90deg, #0f6b88, #22c1a7);
+      color: #fff;
+      border: 1px solid #0b5066;
+      padding: 4px 8px;
+      font-size: 12px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      background: linear-gradient(180deg, #ffffff, #f8fbff);
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 16px;
+    }
+
+    .table th, .table td {
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      text-align: left;
+      font-size: 14px;
+    }
+
+    .table th { background: #f4f7f5; }
+
+    details {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #fafcfb;
+      margin-top: 8px;
+    }
+
+    summary { cursor: pointer; font-weight: 600; }
+
+    @media (max-width: 980px) {
+      .app { grid-template-columns: 1fr; }
+      nav { position: static; }
+      header { position: static; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="title">
+        <h1>MycoDB: Der Einstieg</h1>
+        <div class="subtitle">Von Null auf Datenbank-Profi – kompakt, praxisnah, deutsch.</div>
+      </div>
+      <div class="progress"><span id="progress-bar"></span></div>
+    </header>
+
+    <nav>
+      <h2>Inhalt</h2>
+      <a href="#intro">Einleitung: Systemkontext</a>
+      <a href="#quickstart">Erste 60 Sekunden</a>
+      <a href="#kap1">Kapitel 1: Grundlagen</a>
+      <a href="#kap2">Kapitel 2: Kurzschreibweise</a>
+      <a href="#kap3">Kapitel 3: SQL</a>
+      <a href="#kap4">Kapitel 4: Delta-Prinzip</a>
+      <a href="#kap5">Kapitel 5: Fokus &amp; Radius</a>
+      <a href="#mycodm">MycoDM</a>
+      <a href="#benchmark">Benchmark &amp; Emergenz</a>
+      <a href="#kap6">Kapitel 6: Produktivitaet</a>
+      <a href="#cmdref">Kommando-Referenz</a>
+      <a href="#trouble">Troubleshooting</a>
+      <a href="#faq">FAQ</a>
+      <a href="#cheat">Cheat Sheet</a>
+      <a href="#glossar">Mini-Glossar</a>
+      <a href="#projekt">Mini-Projekt</a>
+    </nav>
+
+    <main>
+      <section id="intro">
+        <h2>Einleitung: Was ist das Micro-Swarm-System?</h2>
+        <p>MycoDB ist in das Micro-Swarm-System eingebettet: ein biologisch inspiriertes Artificial-Life-Modell, das untersucht, wie globale Koordination aus lokalen Interaktionen entsteht. Statt Black-Box-KI setzt Micro-Swarm auf nachvollziehbare Mechanismen (Glass-Box). Das bedeutet: Jede Regel, jede Spur und jede Entscheidung ist messbar und erklaerbar, nicht nur statistisch wirksam.</p>
+        <p>Der Kern von Micro-Swarm ist die Idee der Emergenz. Viele einfache Agenten handeln lokal und ohne globale Sicht. Trotzdem kann daraus ein geordnetes, zielgerichtetes Verhalten entstehen. Genau diese Frage steht im Zentrum der Forschung: Wie wird aus lokalen Regeln ein stabiles, intelligentes Kollektiv? Die Antwort entsteht nicht aus komplexen neuronalen Netzen, sondern aus dem Zusammenspiel einfacher Regeln, vieler Akteure und eines mehrschichtigen Gedaechtnisses.</p>
+
+        <div class="info-box">
+          <strong>Allgemeines Datenbank-Wissen</strong>: Datenbanksysteme spiegeln oft die Struktur ihrer Anwendung. Wenn ein System lokal und dezentral arbeitet, ist es hilfreich, dass auch das Datenmodell diese Ebenen klar und transparent abbildet.
+        </div>
+
+        <div class="mycodb-box">
+          <strong>Micro-Swarm in Kurzform</strong>:
+          <ul>
+            <li>Viele lokale Agenten interagieren ohne zentrale Steuerung.</li>
+            <li>Die Umwelt ist ein 2D-Grid mit Ressourcen und Kommunikationsfeldern.</li>
+            <li>Ein mehrschichtiges Gedaechtnis (Molekuele, Pheromone, Mycel, DNA) speichert Spuren mit unterschiedlichen Zeithorizonten.</li>
+            <li>Das System ist messbar und erklaerbar – ein „Glass-Box“-Modell.</li>
+          </ul>
+        </div>
+
+        <p>Das mehrschichtige Gedaechtnis ist entscheidend: Molekuele wirken sehr kurz, Pheromone mittel, das Mycel strukturell langfristig, und DNA speichert evolutionaere Strategien. Diese Zeithorizonte erlauben, gleichzeitig schnell zu reagieren und langfristig stabile Strukturen zu bilden. Das ist der Grund, warum Micro-Swarm sowohl robuste Selbstorganisation als auch Anpassung unter Stoerung zeigen kann.</p>
+        <p>Im Forschungskontext wurden drei typische Szenarien betrachtet: Ein Baseline-Lauf zeigt, wie sich aus Chaos ein geordnetes Netzwerk entwickelt. Ein Stress-Test prueft, ob das System sich bei Stoerungen neu organisiert. Ein Evolutionslauf zeigt, wie erfolgreiche Strategien langfristig im DNA-Pool ueberleben. Diese Experimente machen deutlich, dass die Ordnung nicht von oben vorgegeben wird, sondern aus dem Zusammenspiel lokaler Regeln und Umweltspuren entsteht.</p>
+        <p>MycoDB dient als Datenbasis fuer diese Welt: Du kannst Datensaetze (Payloads), Tabellen und Beziehungen abfragen und verstehen, wie sich der Zustand des Systems zusammensetzt. Dieses Lehrbuch setzt darauf auf und bringt dir die Shell, die Kurzschreibweise und SQL so nahe, dass du nach wenigen Minuten selbst sicher arbeiten kannst.</p>
+      </section>
+
+      <section id="quickstart">
+        <h2>Erste 60 Sekunden (Schnellstart)</h2>
+        <p>Der Schnellstart bringt dich sofort in die MycoDB-Shell. Danach kannst du jederzeit mit <code>help</code> nachschlagen.</p>
+
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>(PowerShell)
+cd build\Release
+.\micro_swarm.exe --mode db_shell --db chinook_optimized.myco --db-radius 5500</code></pre>
+        </div>
+
+        <div class="mycodb-box">
+          <strong>MycoDB</strong>: <code>--db-radius</code> bestimmt, wie weit um den Fokus gesucht wird. Grosser Wert = eher global, kleiner Wert = lokal und oft schneller.
+        </div>
+
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>radius 15
+radius 200</code></pre>
+        </div>
+
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>exit</code></pre>
+        </div>
+
+        <div class="callout">
+          <strong>Reset-Block</strong> (wenn Ergebnisse komisch wirken):
+          <div class="code-block">
+            <button class="copy-btn">Copy</button>
+            <pre><code>unfocus
+radius 5500
+show off
+limit off
+sort reset
+format table</code></pre>
+          </div>
+          <div class="mycodb-box">
+            <strong>Merke</strong>: MycoDB ist zustandsbehaftet. Einstellungen wie <code>limit</code>, <code>show</code>, <code>format</code>, Fokus und <code>radius</code> bleiben aktiv, bis du sie aenderst.
+          </div>
+        </div>
+      </section>
+
+      <section id="kap1">
+        <h2>Kapitel 1: Hallo MycoDB (Grundlagen)</h2>
+
+        <div class="info-box">
+          <strong>Allgemeines Datenbank-Wissen</strong>: Eine Datenbank speichert Daten in Tabellen. Tabellen bestehen aus Zeilen (Datensaetzen) und Spalten (Merkmalen). Das gilt in fast allen Datenbanksystemen.
+        </div>
+
+        <h3>Erste Schritte in der Shell</h3>
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>tables
+
+describe Album
+
+schema Album
+
+stats</code></pre>
+        </div>
+
+        <p>Mit <code>tables</code> siehst du, welche Tabellen es gibt. <code>describe</code> zeigt Schema + Beispielzeile, <code>schema</code> nur Spaltennamen. <code>stats</code> zaehlt Datensaetze.</p>
+
+        <div class="mycodb-box">
+          <strong>MycoDB</strong>: Sobald Fokus/Radius aktiv sind, werden Abfragen lokal. Ohne Fokus ist die Suche global.
+        </div>
+      </section>
+
+      <section id="kap2">
+        <h2>Kapitel 2: Daten finden (Die Myco-Kurzschreibweise)</h2>
+
+        <div class="info-box">
+          <strong>Allgemeines Datenbank-Wissen</strong>: Ein Primary Key ist eine eindeutige ID. Ein Foreign Key verweist auf einen Datensatz in einer anderen Tabelle. So entstehen Verknuepfungen.
+        </div>
+
+        <div class="mycodb-box">
+          <strong>MycoDB</strong>: Die Kurzschreibweise spart Tipparbeit bei Standard-Abfragen.
+        </div>
+
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>Album 1
+Track AlbumId=1
+TrackId=13
+Track AlbumId=1 show TrackId,Name,Milliseconds
+show TrackId,Name
+show off</code></pre>
+        </div>
+
+        <details>
+          <summary>Mini-Uebungen (Kapitel 2)</summary>
+          <p><strong>Aufgaben:</strong> Album 1 finden, Tracks von Album 1 listen, nur TrackId/Name zeigen.</p>
+          <div class="code-block">
+            <button class="copy-btn">Copy</button>
+            <pre><code>Album 1
+Track AlbumId=1
+Track AlbumId=1 show TrackId,Name</code></pre>
+          </div>
+        </details>
+      </section>
+
+      <section id="kap3">
+        <h2>Kapitel 3: SQL in MycoDB (Die universelle Sprache)</h2>
+
+        <div class="info-box">
+          <strong>Allgemeines Datenbank-Wissen</strong>: SQL ist die Standardsprache fuer relationale Datenbanken. Abfragen bestehen aus SELECT, Filtern (WHERE) und Sortierung (ORDER BY).
+        </div>
+
+        <div class="mycodb-box">
+          <strong>MycoDB</strong>: SQL wird ueber den Befehl <code>sql</code> ausgefuehrt. Mehrere Statements kannst du mit <code>;</code> trennen.
+        </div>
+
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>sql SELECT TrackId, Name FROM Track WHERE AlbumId=1
+sql SET LIMIT 5; SELECT TrackId, Name FROM Track</code></pre>
+        </div>
+
+        <div class="info-box">
+          <strong>Allgemeines Datenbank-Wissen</strong>: Schreiboperationen (INSERT/UPDATE/DELETE) veraendern Daten. In Lernphasen nutzt man oft Test-IDs und bereinigt danach.
+        </div>
+
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>sql INSERT INTO Album (AlbumId, Title, ArtistId) VALUES (9999, 'Mein Album', 1)
+sql UPDATE Album SET Title='Mein Album (Edit)' WHERE AlbumId=9999</code></pre>
+        </div>
+
+        <div class="mycodb-box">
+          <strong>MycoDB</strong>: Ergebnisse kannst du direkt mit ORDER BY sortieren oder nachtraeglich mit <code>sort</code> umsortieren.
+        </div>
+
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>sql SELECT TrackId,Milliseconds,Name FROM Track WHERE AlbumId=1
+sort Milliseconds num
+sort TrackId desc num, Name asc
+sort reset</code></pre>
+        </div>
+
+        <details>
+          <summary>Mini-Uebungen (Kapitel 3)</summary>
+          <p><strong>Aufgaben:</strong> Abfrage fuer Album 1, Limit setzen, danach nach Milliseconds sortieren.</p>
+          <div class="code-block">
+            <button class="copy-btn">Copy</button>
+            <pre><code>sql SELECT TrackId, Name FROM Track WHERE AlbumId=1
+limit 5
+sql SELECT TrackId, Name FROM Track WHERE AlbumId=1
+limit off
+sort Milliseconds num</code></pre>
+          </div>
+          <p>Wenn du dich verrannt hast: nutze den Reset-Block aus dem Schnellstart.</p>
+        </details>
+      </section>
+
+      <section id="kap4">
+        <h2>Kapitel 4: Das Delta-Prinzip (Daten aendern)</h2>
+
+        <div class="info-box">
+          <strong>Allgemeines Datenbank-Wissen</strong>: Viele Systeme schreiben Aenderungen zunaechst in eine Zwischenstufe (Staging/Transactions), bevor sie dauerhaft gespeichert werden.
+        </div>
+
+        <div class="mycodb-box">
+          <strong>MycoDB</strong>: Aenderungen landen im Delta. <code>merge</code> uebernimmt sie dauerhaft, <code>undo</code> verwirft sie.
+        </div>
+
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>delta
+delta show
+merge
+undo
+merge auto 100</code></pre>
+        </div>
+
+        <details>
+          <summary>Mini-Uebungen (Kapitel 4)</summary>
+          <p><strong>Aufgaben:</strong> Test-Album einfuegen, Delta pruefen, Undo.</p>
+          <div class="code-block">
+            <button class="copy-btn">Copy</button>
+            <pre><code>sql INSERT INTO Album (AlbumId, Title, ArtistId) VALUES (9999, 'Test', 1)
+delta show
+undo</code></pre>
+          </div>
+        </details>
+      </section>
+
+      <section id="kap5">
+        <h2>Kapitel 5: Navigation und Fokus (Graph-Konzepte)</h2>
+
+        <div class="info-box">
+          <strong>Allgemeines Datenbank-Wissen</strong>: Lokale Filter beschleunigen Abfragen, weil weniger Daten untersucht werden muessen. Viele Systeme kennen aehnliche Konzepte wie Index-Scopes oder Partitions.
+        </div>
+
+        <div class="mycodb-box">
+          <strong>MycoDB</strong>: Fokus/Radius begrenzen die Suche auf einen lokalen Bereich.
+        </div>
+
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>goto 1
+radius 8
+focus
+unfocus</code></pre>
+        </div>
+
+        <p><code>goto</code> nutzt eine Payload-ID (interne ID), nicht <code>AlbumId</code>. Wenn du einen Datensatz siehst, kannst du dessen Payload-ID fuer <code>goto</code> verwenden.</p>
+
+        <details>
+          <summary>Mini-Uebungen (Kapitel 5)</summary>
+          <p><strong>Aufgaben:</strong> Fokus setzen, Radius setzen, Fokus pruefen und ausschalten.</p>
+          <div class="code-block">
+            <button class="copy-btn">Copy</button>
+            <pre><code>goto 1
+radius 8
+focus
+unfocus</code></pre>
+          </div>
+        </details>
+        <div class="callout">
+          <strong>Lehrbeispiel: Lokale Abfrage mit neuem Radius</strong>
+          <p>Fokus und Radius bleiben aktiv, bis du sie aenderst oder entfernst.</p>
+          <div class="code-block">
+            <button class="copy-btn">Copy</button>
+            <pre><code>goto 496190
+radius 50
+sql SELECT vorname, nachname FROM users WHERE nachname = 'Wilms' LIMIT 20
+explain
+radius 120
+sql SELECT vorname, nachname FROM users WHERE nachname = 'Wilms' LIMIT 5
+explain
+unfocus
+radius 5500</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="mycodm">
+        <h2>MycoDM: The Architecture of Emergence</h2>
+        <h3>MycoDB: Die sich selbst organisierende Datenbank</h3>
+
+        <h4>Einleitung: Wenn Daten laufen lernen</h4>
+        <p>Was waere, wenn eine Datenbank ihre eigenen Daten so organisieren koennte, dass Abfragen intuitiver und schneller werden? Traditionelle RDBMS sind durch ein ungeloestes Kernproblem gefesselt: die Kluft zwischen logischer Verwandtschaft und physischer Speicherlokalitaet.</p>
+        <p>Logisch zusammengehoerige Daten, wie zum Beispiel ein Kunde und seine Bestellungen, sind auf der Festplatte oft weit voneinander entfernt gespeichert. Um diese Verbindungen wiederherzustellen, sind rechenintensive JOIN-Operationen notwendig, die das System verlangsamen.</p>
+        <p>MycoDB (Mycelium Database) ist ein experimenteller, biologisch inspirierter Ansatz, der dieses Problem nicht durch starre mathematische Indexstrukturen wie B-Trees, sondern durch Emergenz und Selbstorganisation loest. Es ist mehr als nur eine Datenbank; es ist eine innovative Anwendung und der primaere Proof-of-Concept fuer das Micro-Swarm Framework, eine hochperformante C++ Artificial-Life-Engine, die darauf ausgelegt ist, komplexe Probleme durch das Zusammenspiel einfacher, lokaler Regeln zu loesen. Als eingebettete Engine, ausgeliefert als Teil der Micro-Swarm DLL, wendet MycoDB diese Prinzipien an, um eine der klassischsten Herausforderungen der Datenspeicherung zu meistern.</p>
+
+        <h3>1. Das Kernkonzept: Biologisches Indexing statt starrer Strukturen</h3>
+        <p>MycoDB uebersetzt traditionelle Datenbankkonzepte in biologische Aequivalente. Anstatt Daten in starren Strukturen abzulegen, werden sie zu physischen Objekten in einer dynamischen 2D-Welt, die von einem Agentenschwarm intelligent geordnet werden.</p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Traditionelles SQL-Konzept</th>
+              <th>Biologisches Aequivalent</th>
+              <th>Funktion &amp; Erklaerung</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Zeile (Datensatz)</td>
+              <td>Payload (Last)</td>
+              <td>Ein physisches Datenpaket, das sich in einem 2D-Raum befindet.</td>
+            </tr>
+            <tr>
+              <td>Tabelle</td>
+              <td>Pheromon-Signatur</td>
+              <td>Jede Tabelle emittiert eine einzigartige Duftnote, die als Signal dient.</td>
+            </tr>
+            <tr>
+              <td>Fremdschluessel</td>
+              <td>Anziehungskraft</td>
+              <td>Agenten werden von den Pheromonen der Elterndatensaetze angezogen.</td>
+            </tr>
+            <tr>
+              <td>Index</td>
+              <td>Cluster &amp; Mycel</td>
+              <td>Daten bilden Cluster. Ein Mycel-Netzwerk stabilisiert die Pfade dazwischen.</td>
+            </tr>
+            <tr>
+              <td>Abfrage (Query)</td>
+              <td>Lokale Suche</td>
+              <td>Suche wird auf die unmittelbare raeumliche Naehe beschraenkt (hocheffizient).</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>2. Der Mechanismus: Wie der "Schwarm-Sort" Daten organisiert</h3>
+        <p>Die Datenorganisation in MycoDB ist kein einmaliger, statischer Vorgang, sondern ein aktiver Prozess, der als "Schwarm-Sort" bezeichnet wird. Dabei wird ein Agentenschwarm genutzt, um die Daten physisch zu sortieren. Der Prozess der Datenaufnahme (Ingestion) laeuft wie folgt ab:</p>
+        <ol>
+          <li>Ein klassischer SQL-Dump wird ueber die API-Funktion <code>ms_db_load_sql()</code> importiert, wobei die Datensaetze zunaechst an zufaelligen Positionen existieren.</li>
+          <li>Tausende von "Carrier Agents" (Traeger-Agenten) werden in einem 2D-Raum erzeugt.</li>
+          <li>Jeder Agent nimmt einen einzelnen Datensatz (eine "Payload") auf und wird zu dessen Traeger.</li>
+          <li>Besitzt der Datensatz einen Fremdschluessel (z.B. <code>ArtistId</code>), sucht der Agent die Position des zugehoerigen Elterndatensatzes, indem er dessen einzigartiger Pheromon-Signatur folgt.</li>
+          <li>Der Agent transportiert seine Payload physisch durch den 2D-Raum zu seinem Ziel.</li>
+        </ol>
+        <p>Das Ergebnis dieses Prozesses, der ueber <code>ms_db_run_ingest()</code> gestartet wird, ist faszinierend: Nach tausenden von Simulationsschritten bilden sich organische Cluster.</p>
+        <div class="mycodb-box">
+          <strong>Zitat:</strong> Alle Alben eines Kuenstlers liegen nun physisch um den Kuenstler herum.
+        </div>
+        <p>Der optimierte Zustand wird anschliessend als <code>.myco</code>-Datei persistiert. Diese physische Vorsortierung ist der Schluessel zur aussergewoehnlichen Abfragegeschwindigkeit von MycoDB.</p>
+
+        <h3>3. Der Nutzen: Wie komplexe JOINs zu schnellen Nachbarschaftssuchen werden</h3>
+        <p>Da logisch zusammengehoerige Daten bereits physisch nahe beieinander liegen, werden komplexe und langsame JOIN-Operationen zu extrem schnellen, lokalen Suchen. MycoDB fuehrt dazu ein neues, kontextbasiertes Abfragemodell ein, das auf Fokus und Radius basiert.</p>
+        <ul>
+          <li><strong>GOTO</strong>: Setzt den Lesekopf der Datenbank physisch auf die Position eines bestimmten Datensatzes.</li>
+          <li><strong>RADIUS</strong>: Definiert einen Suchradius (z.B. 10 Einheiten) um diesen Fokuspunkt.</li>
+        </ul>
+        <p>Alle folgenden Abfragen werden ausschliesslich in diesem kleinen, lokalen Bereich ausgefuehrt. Es ist entscheidend zu verstehen, dass dieses Fokus-Modell keine proprietaere Abfragesprache ersetzt. Im Gegenteil: Es fungiert als eine kontextsetzende Schicht ueber einer leistungsfaehigen, in C++ implementierten SQL-Light-Engine. Diese unterstuetzt <code>SELECT</code>, <code>WHERE</code>, <code>JOIN</code>, Subqueries und CTEs (<code>WITH</code>).</p>
+        <h4>Praxis-Beispiel</h4>
+        <ol>
+          <li><strong>Fokus finden (globaler Scan)</strong>: <code>Artist Name="AC/DC"</code> --&gt; Output: ID=5, x=120, y=45</li>
+          <li><strong>Fokus setzen (physischer Sprung)</strong>: <code>GOTO ID=5</code></li>
+          <li><strong>Lokal abfragen (extrem schnell)</strong>: <code>SELECT * FROM Album RADIUS 10</code></li>
+        </ol>
+        <p>Dieser Ansatz findet alle Ergebnisse sofort, da die Agenten die Alben bereits physisch zum Kuenstler getragen haben. Ein teurer Scan der gesamten Tabelle ist nicht mehr noetig.</p>
+
+        <h3>4. Fazit: Eine Datenbank, der man beim Denken zusehen kann</h3>
+        <p>Die zentrale Innovation von MycoDB beweist, dass Datenbanksysteme nicht starr sein muessen. Es dient als greifbarer Beweis fuer die zentrale These des Micro-Swarm-Projekts: dass komplexe, adaptive Systeme aus einfachen, lokalen Regeln entstehen koennen.</p>
+        <p>Durch die Anwendung von Prinzipien der Schwarmintelligenz erreicht MycoDB eine emergente, selbstorganisierende Defragmentierung von Information. Anstatt dass ein Entwickler manuelle Indizes definieren muss, organisiert sich die Datenbank selbst.</p>
+        <div class="mycodb-box">
+          <strong>Zitat:</strong> Es ist die erste Datenbank, die man nicht nur abfragen, sondern der man beim "Denken" (Sortieren) zusehen kann.
+        </div>
+      </section>
+
+      <section id="benchmark">
+        <h2>Benchmark &amp; Emergenz: Der Morningstar-Report</h2>
+        <p><strong>Datum:</strong> 11. Januar 2026</p>
+        <p><strong>System:</strong> Morningstar (Ryzen 5 5600H, APU mit GPU-Offloading)</p>
+        <p><strong>Ziel:</strong> Vergleich von Daten-Dichte (Kompaktheit) vs. Daten-Freiraum (Emergenz) zur Optimierung von SQL-Abfragen.</p>
+
+        <div class="card" style="background:#0a0f16;border:1px solid #1f2a37;padding:16px;border-radius:16px;box-shadow:0 16px 40px rgba(0,0,0,0.25);margin:16px 0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <h4 style="color:#22c1a7;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;font-size:12px;margin:0;">EMERGENT CLUSTER MAP (Size 2048)</h4>
+            <span style="color:#9ca3af;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;font-size:11px;">Status: 356ms Scan Complete</span>
+          </div>
+          <div style="position:relative;aspect-ratio:16/9;background:#000;border:1px solid #1f2937;border-radius:12px;overflow:hidden;">
+            <div style="position:absolute;inset:0;opacity:0.1;background-image:linear-gradient(#333 1px, transparent 1px), linear-gradient(90deg, #333 1px, transparent 1px);background-size:20px 20px;"></div>
+            <svg viewBox="0 0 400 200" style="width:100%;height:100%;position:relative;z-index:2;">
+              <defs>
+                <radialGradient id="scentGlow" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stop-color="#22c1a7" stop-opacity="0.4" />
+                  <stop offset="100%" stop-color="#22c1a7" stop-opacity="0" />
+                </radialGradient>
+              </defs>
+              <circle cx="260" cy="120" r="40" fill="url(#scentGlow)"></circle>
+              <circle cx="252" cy="108" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="265" cy="114" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="272" cy="121" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="258" cy="132" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="249" cy="125" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="266" cy="132" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="275" cy="126" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="262" cy="141" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="255" cy="116" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="269" cy="138" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="282" cy="122" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="246" cy="118" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="260" cy="128" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="277" cy="136" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="256" cy="138" r="1.5" fill="#fff" opacity="0.8"></circle>
+              <circle cx="260" cy="120" r="30" fill="none" stroke="#0f6b88" stroke-width="1" stroke-dasharray="4 2"></circle>
+              <line x1="260" y1="120" x2="310" y2="70" stroke="#aaa" stroke-width="0.5"></line>
+              <text x="315" y="65" fill="#aaa" font-size="8" style="font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">FOKUS: PL_496190 (Wilms)</text>
+              <text x="315" y="75" fill="#22c1a7" font-size="8" style="font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">97% Match Density</text>
+              <rect x="10" y="170" width="80" height="20" rx="4" fill="rgba(34, 193, 167, 0.1)" stroke="#22c1a7" stroke-width="0.5"></rect>
+              <text x="18" y="183" fill="#22c1a7" font-size="10" font-weight="700" style="font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">356 ms</text>
+            </svg>
+            <div style="position:absolute;inset:0;background:linear-gradient(to top, rgba(0,0,0,0.7), transparent);opacity:0.6;"></div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;font-size:11px;color:#d1d5db;">
+            <span><span style="display:inline-block;width:8px;height:8px;background:#fff;border-radius:999px;margin-right:6px;"></span>Payloads</span>
+            <span><span style="display:inline-block;width:8px;height:8px;background:#22c1a7;border-radius:999px;margin-right:6px;"></span>Pheromon-Glow</span>
+            <span><span style="display:inline-block;width:14px;height:2px;background:#0f6b88;margin-right:6px;display:inline-block;"></span>Radius-Scan</span>
+            <span><span style="display:inline-block;width:14px;height:2px;background:#aaa;margin-right:6px;display:inline-block;"></span>Fokus-Markierung</span>
+          </div>
+          <p style="margin-top:8px;color:#9ca3af;font-size:11px;font-style:italic;">Darstellung der Informations-Insel bei Size 2048. 97% der relevanten Daten liegen auf ~0,06% der Flaeche.</p>
+        </div>
+
+        <h3>1. Das Duell der Welten (Side-by-Side)</h3>
+        <p>Um die 500.000 Payloads zu organisieren, haben wir zwei gegensaetzliche Philosophien getestet.</p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Welt A: "Der Massanzug"</th>
+              <th>Welt B: "Die weite Welt"</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Gitter-Groesse (--size)</strong></td>
+              <td>900</td>
+              <td><strong>2048</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Gesamtflaeche</strong></td>
+              <td>0,81 Mio. Zellen</td>
+              <td><strong>4,19 Mio. Zellen</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Daten-Dichte</strong></td>
+              <td>~62 % (Kompakt)</td>
+              <td><strong>~12 % (Sparse/Leer)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Zeit (Global Scan)</strong></td>
+              <td>~46 Sek.</td>
+              <td><strong>~27 Sek.</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Zeit (Lokal r=100)</strong></td>
+              <td>1.544 ms</td>
+              <td><strong>356 ms</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Effizienz-Gewinn</strong></td>
+              <td>Referenz</td>
+              <td><strong>4,3x schneller als die kompakte Welt</strong></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>2. Analyse: Warum ist "Groesseres" schneller?</h3>
+        <p>In der kompakten Welt (900) sind die Daten gequetscht. Agenten haben kaum Platz, um Payloads zu trennen. In der weiten Welt (2048) entstehen saubere Cluster-Inseln. Ein lokaler Scan trifft fast nur relevante Daten: "Fleisch" statt "Fett".</p>
+
+        <h3>3. Die Skalierung des Radius (Geometrie-Falle)</h3>
+        <ul>
+          <li><strong>Radius 1000:</strong> ~27,5 s (fast global)</li>
+          <li><strong>Radius 500:</strong> ~7,5 s</li>
+          <li><strong>Radius 100:</strong> 356 ms (Cluster-Kern)</li>
+        </ul>
+
+        <h3>4. Morningstar-Fazit</h3>
+        <p>Waehle ein Gitter, das deutlich groesser ist als die Datenmenge (Dichte ~10-15%). Nutze den Ingest-Prozess (100-200 Steps), um Informations-Inseln entstehen zu lassen. Eine Abfrage mit <code>goto</code> und kleinem <code>radius</code> (&lt; 100) transformiert Minuten in Millisekunden.</p>
+        <div class="mycodb-box">
+          <strong>Fazit:</strong> 356 ms fuer 500.000 Datensaetze ohne klassischen Index ist ein Triumph der C++ Architektur.
+        </div>
+      </section>
+
+      <section id="kap6">
+        <h2>Kapitel 6: Produktivitaet &amp; Tools</h2>
+
+        <div class="grid">
+          <div class="card">
+            <strong>Makros</strong>
+            <div class="code-block">
+              <button class="copy-btn">Copy</button>
+              <pre><code>save toptracks sql SELECT TrackId,Name FROM Track WHERE AlbumId=1
+run toptracks</code></pre>
+            </div>
+          </div>
+          <div class="card">
+            <strong>Makros speichern/laden</strong>
+            <div class="code-block">
+              <button class="copy-btn">Copy</button>
+              <pre><code>macros save
+macros save C:\temp\my_macros.json
+macros load C:\temp\my_macros.json</code></pre>
+            </div>
+          </div>
+          <div class="card">
+            <strong>History</strong>
+            <div class="code-block">
+              <button class="copy-btn">Copy</button>
+              <pre><code>history
+last
+!3</code></pre>
+            </div>
+          </div>
+          <div class="card">
+            <strong>Export</strong>
+            <div class="code-block">
+              <button class="copy-btn">Copy</button>
+              <pre><code>export csv C:\temp\tracks.csv
+export json C:\temp\tracks.json</code></pre>
+            </div>
+            <p>Stelle sicher, dass der Zielordner existiert (z. B. <code>C:\temp</code>).</p>
+            <p>Fuer schoenes Lesen: <code>format table</code>. Fuer maschinenlesbar: <code>format csv</code> oder <code>format json</code>.</p>
+          </div>
+          <div class="card">
+            <strong>Debugging</strong>
+            <div class="code-block">
+              <button class="copy-btn">Copy</button>
+              <pre><code>explain</code></pre>
+            </div>
+          </div>
+        </div>
+        <div class="callout">
+          <strong>Praxis-Tipp: Makros sichern</strong>
+          <p>Wenn du wiederkehrende Abfragen brauchst, speichere sie als Makros und exportiere sie am Ende der Session.</p>
+          <div class="code-block">
+            <button class="copy-btn">Copy</button>
+            <pre><code>save toptracks sql SELECT TrackId,Name FROM Track WHERE AlbumId=1
+macros save
+macros load 2026-01-11_macros.json</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="cmdref">
+        <h2>Kommando-Referenzhandbuch</h2>
+        <p>Dieses Dokument beschreibt die Interaktionsmoeglichkeiten mit der <strong>micro_swarm Engine</strong> im <code>db_shell</code>-Modus.</p>
+
+        <h3>1. Raeumliche Navigation (Spatial Control)</h3>
+        <p>Diese Befehle steuern den physischen Fokus innerhalb des Daten-Gitters.</p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Befehl</th>
+              <th>Beschreibung</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>goto &lt;id&gt;</code></td>
+              <td>Spricht den Lesekopf direkt auf die (x,y) Position der angegebenen Payload-ID an.</td>
+            </tr>
+            <tr>
+              <td><code>radius &lt;n&gt;</code></td>
+              <td>Definiert den Wirkungskreis fuer nachfolgende Abfragen. Ein kleinerer Radius bedeutet extreme Geschwindigkeit.</td>
+            </tr>
+            <tr>
+              <td><code>focus</code></td>
+              <td>Zeigt die aktuellen Koordinaten und den gesetzten Radius an.</td>
+            </tr>
+            <tr>
+              <td><code>unfocus</code></td>
+              <td>Entfernt den raeumlichen Filter und kehrt zum globalen Scan zurueck.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>2. Inspektion &amp; Metadaten</h3>
+        <p>Schnelle Einblicke in die Struktur der geladenen Welt.</p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Befehl</th>
+              <th>Beschreibung</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>tables</code></td>
+              <td>Listet alle Tabellen auf, die im <code>.myco</code> Abbild vorhanden sind.</td>
+            </tr>
+            <tr>
+              <td><code>stats</code></td>
+              <td>Zeigt die Anzahl der Datensaetze (Payloads) pro Tabelle an (Sofort-Abruf).</td>
+            </tr>
+            <tr>
+              <td><code>schema &lt;table&gt;</code></td>
+              <td>Listet alle Spaltennamen der angegebenen Tabelle auf.</td>
+            </tr>
+            <tr>
+              <td><code>describe &lt;table&gt;</code></td>
+              <td>Kombiniert das Schema mit einem physischen Beispiel-Datensatz aus dem Gitter.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>3. Abfragen &amp; Suche</h3>
+        <p>Vom intuitiven Schnellzugriff bis hin zum komplexen Standard-SQL.</p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Befehl</th>
+              <th>Beschreibung</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>&lt;Table&gt; &lt;ID&gt;</code></td>
+              <td>PK-Shortcut: Findet den Datensatz in Tabelle X mit der Primaerschluessel-ID Y.</td>
+            </tr>
+            <tr>
+              <td><code>&lt;Table&gt; &lt;Col&gt;=&lt;Val&gt;</code></td>
+              <td>Column-Shortcut: Findet alle Datensaetze, die in einer bestimmten Spalte den Wert haben.</td>
+            </tr>
+            <tr>
+              <td><code>&lt;Col&gt;=&lt;Val&gt;</code></td>
+              <td>Global-Shortcut: Durchsucht alle Tabellen nach diesem Spaltenwert.</td>
+            </tr>
+            <tr>
+              <td><code>sql &lt;statement&gt;</code></td>
+              <td>Fuehrt echtes SQL aus (<code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>).</td>
+            </tr>
+            <tr>
+              <td><code>explain</code></td>
+              <td>Analysiert die letzte Query: War sie lokal oder global? Wie viele Hits gab es?</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>4. Delta-Store &amp; Transaktionen</h3>
+        <p>Aenderungen sicher verwalten, ohne den Hauptspeicher sofort zu korrumpieren.</p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Befehl</th>
+              <th>Beschreibung</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>delta</code></td>
+              <td>Statusbericht: Wie viele Aenderungen (Upserts/Tombstones) liegen im Wartebereich?</td>
+            </tr>
+            <tr>
+              <td><code>delta show</code></td>
+              <td>Listet alle ausstehenden Schreiboperationen im Detail auf.</td>
+            </tr>
+            <tr>
+              <td><code>merge</code></td>
+              <td>Commit: Schreibt das Delta permanent in das Gitter und loest ein Re-Clustering aus.</td>
+            </tr>
+            <tr>
+              <td><code>merge auto &lt;n&gt;</code></td>
+              <td>Aktiviert das automatische Mergen, sobald <code>n</code> Aenderungen erreicht sind.</td>
+            </tr>
+            <tr>
+              <td><code>undo</code></td>
+              <td>Macht die letzte Aenderung im Delta-Store rueckgaengig.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>5. Konfiguration &amp; Ausgabe</h3>
+        <p>Steuerung der Darstellung und Verarbeitungsmenge.</p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Befehl</th>
+              <th>Beschreibung</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>limit &lt;n|off&gt;</code></td>
+              <td>Begrenzt die Anzahl der angezeigten Zeilen (schont das Terminal).</td>
+            </tr>
+            <tr>
+              <td><code>show &lt;cols|off&gt;</code></td>
+              <td>Setzt einen dauerhaften Spaltenfilter fuer alle kommenden Abfragen.</td>
+            </tr>
+            <tr>
+              <td><code>format &lt;table|csv|json&gt;</code></td>
+              <td>Wechselt den Ausgabestil (Tabelle fuer Menschen, CSV/JSON fuer Maschinen).</td>
+            </tr>
+            <tr>
+              <td><code>export &lt;csv|json&gt; &lt;path&gt;</code></td>
+              <td>Speichert das letzte Abfrageergebnis direkt in eine Datei.</td>
+            </tr>
+            <tr>
+              <td><code>cls | clear</code></td>
+              <td>Leert das Konsolenfenster.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>6. Ingest &amp; Import</h3>
+        <p>Laedt einen SQL-Dump und ersetzt die aktuelle Session.</p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Befehl</th>
+              <th>Beschreibung</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>ingest &lt;sql_path&gt; [rules_path]</code></td>
+              <td>Fuehrt einen Ingest aus einer SQL-Datei aus. Optional mit <code>ingest_rules.json</code>.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>7. Produktivitaet &amp; Makros</h3>
+        <p>Automatisierung wiederkehrender Aufgaben.</p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Befehl</th>
+              <th>Beschreibung</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>history</code></td>
+              <td>Zeigt die Liste der zuletzt eingegebenen Befehle.</td>
+            </tr>
+            <tr>
+              <td><code>last | redo | !n</code></td>
+              <td>Wiederholt die letzte Query oder einen spezifischen Befehl aus der Historie.</td>
+            </tr>
+            <tr>
+              <td><code>save &lt;name&gt; [cmd]</code></td>
+              <td>Speichert den aktuellen oder einen angegebenen Befehl als Makro.</td>
+            </tr>
+            <tr>
+              <td><code>run &lt;name&gt;</code></td>
+              <td>Fuehrt ein gespeichertes Makro aus.</td>
+            </tr>
+            <tr>
+              <td><code>macros save [path]</code></td>
+              <td>Exportiert alle Makros in eine JSON-Datei.</td>
+            </tr>
+            <tr>
+              <td><code>macros load &lt;path&gt;</code></td>
+              <td>Laedt Makros aus einer JSON-Datei nach.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>8. Genetic Ingest Rules (nur db_ingest)</h3>
+        <p>Regelbasierte Cluster-Bildung beim Ingest. Die Regeln wirken nur waehrend des Ingest-Prozesses.</p>
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>--ingest-rules &lt;path&gt;</code></pre>
+        </div>
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>.\micro_swarm.exe --mode db_ingest --input data.sql --output data.myco --ingest-rules docs\ingest_rules.example.json</code></pre>
+        </div>
+        <ul>
+          <li><code>foreign_key</code> (Default: <code>.*_id$</code>)</li>
+          <li><code>trait_cluster</code></li>
+          <li><code>domain_cluster</code></li>
+        </ul>
+        <p>Beispiel-JSON: <code>docs/ingest_rules.example.json</code></p>
+      </section>
+
+      <section id="trouble">
+        <h2>Troubleshooting fuer Anfaenger</h2>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Problem</th>
+              <th>Loesung</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Keine Treffer (0 Zeilen)</td>
+              <td>Schreibweise pruefen mit <code>tables</code>, <code>schema &lt;table&gt;</code>, <code>describe &lt;table&gt;</code>. Radius zu klein? Nach <code>goto</code> ggf. <code>unfocus</code>.</td>
+            </tr>
+            <tr>
+              <td>Spalten unbekannt</td>
+              <td>Bei Dumps ohne Spaltenliste <code>col0</code>, <code>col1</code> nutzen oder neu ingestieren.</td>
+            </tr>
+            <tr>
+              <td>String vs Zahl</td>
+              <td>Strings brauchen Quotes: <code>Name LIKE 'A%'</code>. Zahlen ohne Quotes: <code>TrackId=1</code>.</td>
+            </tr>
+            <tr>
+              <td>Globale Suche findet nichts</td>
+              <td>Fokus/Radiussperre aktiv. Pruefe <code>focus</code>, setze <code>unfocus</code>, Radius vergroessern.</td>
+            </tr>
+            <tr>
+              <td>Ausgabe abgeschnitten</td>
+              <td><code>limit</code> ist gesetzt. Nutze <code>limit off</code>.</td>
+            </tr>
+            <tr>
+              <td>Spalten fehlen / komische Ausgabe</td>
+              <td><code>show</code> ist aktiv. Nutze <code>show off</code>.</td>
+            </tr>
+            <tr>
+              <td>Ausgabe sieht komisch aus</td>
+              <td><code>format</code> ist gesetzt. Nutze <code>format table</code>.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="faq">
+        <h2>FAQ</h2>
+        <details>
+          <summary>Wie speichere und lade ich Makros?</summary>
+          <p>Makros sind nur fuer die aktuelle Session aktiv. Speichere sie als JSON und lade sie spaeter wieder.</p>
+          <div class="code-block">
+            <button class="copy-btn">Copy</button>
+            <pre><code>save toptracks sql SELECT TrackId,Name FROM Track WHERE AlbumId=1
+macros save
+macros load 2026-01-11_macros.json</code></pre>
+          </div>
+        </details>
+      </section>
+
+      <section id="cheat">
+        <h2>Cheat Sheet</h2>
+        <div class="grid">
+          <div class="card">
+            <strong>Core Commands</strong>
+            <div class="code-block">
+              <button class="copy-btn">Copy</button>
+              <pre><code>help
+tables
+describe &lt;table&gt;
+schema &lt;table&gt;
+stats
+show &lt;cols|off&gt;
+limit &lt;n|off&gt;
+sql &lt;statement&gt;
+macros save
+macros load C:\temp\my_macros.json</code></pre>
+            </div>
+          </div>
+          <div class="card">
+            <strong>Sort &amp; Fokus</strong>
+            <div class="code-block">
+              <button class="copy-btn">Copy</button>
+              <pre><code>sort &lt;col|index&gt; [asc|desc] [num]
+sort reset
+focus / unfocus
+radius &lt;n&gt; (z. B. 8 = lokal / 5500 = eher global)</code></pre>
+            </div>
+          </div>
+          <div class="card">
+            <strong>Delta &amp; Export</strong>
+            <div class="code-block">
+              <button class="copy-btn">Copy</button>
+              <pre><code>delta
+delta show
+merge
+undo
+export &lt;csv|json&gt; &lt;path&gt;
+explain
+exit</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="glossar">
+        <h2>Mini-Glossar</h2>
+        <div class="grid">
+          <div class="card"><strong>Payload</strong><br />Ein einzelner Datensatz in MycoDBs interner Struktur.</div>
+          <div class="card"><strong>Fokus / Radius</strong><br />Beschraenkt Abfragen auf einen lokalen Bereich.</div>
+          <div class="card"><strong>Delta / Merge / Undo</strong><br />Aenderungen landen im Delta. <code>merge</code> uebernimmt sie in die Hauptdaten und re-clustert, <code>undo</code> verwirft sie.</div>
+          <div class="card"><strong>Shell-Query vs sql</strong><br />Shell ist kurz, SQL ist Standard.</div>
+        </div>
+      </section>
+
+      <section id="projekt">
+        <h2>Mini-Projekt (vom Lesen zum Koennen)</h2>
+        <p><strong>Aufgabe:</strong> Finde ein Album, liste Tracks mit TrackId/Name/Milliseconds, sortiere nach Milliseconds absteigend und exportiere als CSV.</p>
+        <div class="code-block">
+          <button class="copy-btn">Copy</button>
+          <pre><code>Album 1
+Track AlbumId=1 show TrackId,Name,Milliseconds
+sort Milliseconds desc num
+export csv C:\temp\album1_tracks.csv</code></pre>
+        </div>
+        <p>Wenn die CSV leer wirkt: <code>limit off</code> und <code>show off</code> pruefen.</p>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const codeBlocks = document.querySelectorAll('.code-block');
+    codeBlocks.forEach(block => {
+      const btn = block.querySelector('.copy-btn');
+      const code = block.querySelector('code');
+      if (!btn || !code) return;
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(code.innerText).then(() => {
+          btn.textContent = 'Copied';
+          setTimeout(() => btn.textContent = 'Copy', 1200);
+        });
+      });
+    });
+
+    const progress = document.getElementById('progress-bar');
+    const onScroll = () => {
+      const doc = document.documentElement;
+      const total = doc.scrollHeight - doc.clientHeight;
+      const scrolled = total ? (doc.scrollTop / total) * 100 : 0;
+      progress.style.width = scrolled + '%';
+    };
+    document.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+
+    const navLinks = Array.from(document.querySelectorAll('nav a'));
+    const sections = navLinks.map(link => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          navLinks.forEach(link => link.classList.remove('active'));
+          const active = navLinks.find(link => link.getAttribute('href') === '#' + entry.target.id);
+          if (active) active.classList.add('active');
+        }
+      });
+    }, { rootMargin: '-20% 0px -60% 0px' });
+
+    sections.forEach(section => observer.observe(section));
+  </script>
+</body>
+</html>

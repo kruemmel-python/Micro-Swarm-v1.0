@@ -1,0 +1,5 @@
+{
+  "name": "MycoDB Schulungsportal",
+  "description": "Ein interaktives Lernportal für MycoDB mit Fokus auf die Trennung zwischen allgemeiner Datenbanktheorie und spezifischem MycoDB-Wissen.",
+  "requestFramePermissions": []
+}

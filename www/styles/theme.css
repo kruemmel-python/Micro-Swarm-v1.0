@@ -1,0 +1,270 @@
+:root {
+  --bg: #f6f5f2;
+  --surface: #ffffff;
+  --surface-2: #f2f4f6;
+  --text: #1b1f23;
+  --muted: #515b66;
+  --border: #d7dde3;
+  --accent: #2f7f8f;
+  --accent-2: #1f5f6b;
+  --code-bg: #0d1117;
+  --code-text: #e6edf3;
+  --shadow: 0 10px 24px rgba(16, 24, 40, 0.08);
+  --radius: 12px;
+  --font-sans: "Inter", "Source Sans 3", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Consolas", "Courier New", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1.7;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--accent);
+}
+
+.sidebar {
+  width: 280px;
+  height: 100vh;
+  position: fixed;
+  left: 0;
+  top: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--surface-2);
+  z-index: 50;
+}
+
+.main-content {
+  margin-left: 280px;
+  padding: 40px;
+  max-width: 78ch;
+}
+
+.progress-container {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 280px;
+  height: 4px;
+  background: #e9edf1;
+  z-index: 100;
+}
+
+#progress-bar {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+}
+
+.code-block {
+  position: relative;
+  background: var(--code-bg);
+  color: var(--code-text);
+  padding: 16px;
+  border-radius: var(--radius);
+  margin: 12px 0 18px;
+  overflow-x: auto;
+  border: 1px solid #0f1720;
+}
+
+.code-block pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: #111827;
+  color: #e5e7eb;
+  border: 1px solid #1f2937;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.theory-box {
+  background-color: #eff7f4;
+  border-left: 4px solid var(--accent);
+  padding: 16px;
+  margin: 20px 0;
+  border-radius: var(--radius);
+  color: #1f3b40;
+}
+
+.mycodb-box {
+  background-color: #eef5f7;
+  border-left: 4px solid var(--accent-2);
+  padding: 14px 16px;
+  margin: 16px 0;
+  border-radius: var(--radius);
+  color: #1f3b40;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0 16px;
+  font-size: 15px;
+}
+
+.table th,
+.table td {
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  text-align: left;
+  background: var(--surface);
+}
+
+.table th {
+  background: #f4f6f8;
+  color: var(--text);
+  font-weight: 600;
+}
+
+details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  background: var(--surface);
+  margin-top: 8px;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent-2);
+}
+
+.flex { display: flex; }
+.grid { display: grid; }
+.block { display: block; }
+.hidden { display: none; }
+
+.items-center { align-items: center; }
+.items-start { align-items: flex-start; }
+.justify-center { justify-content: center; }
+
+.text-center { text-align: center; }
+.italic { font-style: italic; }
+.opacity-90 { opacity: 0.9; }
+
+.font-bold { font-weight: 700; }
+.font-extrabold { font-weight: 800; }
+.font-medium { font-weight: 500; }
+.font-semibold { font-weight: 600; }
+.font-mono { font-family: var(--font-mono); }
+
+.text-xs { font-size: 12px; }
+.text-sm { font-size: 14px; }
+.text-lg { font-size: 18px; }
+.text-xl { font-size: 20px; }
+.text-2xl { font-size: 24px; }
+.text-4xl { font-size: 32px; }
+.text-[10px] { font-size: 10px; }
+
+.text-gray-900 { color: var(--text); }
+.text-gray-800 { color: #222831; }
+.text-gray-700 { color: #2e3640; }
+.text-gray-500 { color: var(--muted); }
+.text-gray-400 { color: #6b7280; }
+.text-blue-600 { color: var(--accent); }
+.text-blue-800 { color: #1f4f5a; }
+.text-blue-900 { color: #15363c; }
+.text-green-400 { color: #2b7a78; }
+.text-green-800 { color: #1b4d4b; }
+.text-green-900 { color: #163c3a; }
+.text-white { color: #ffffff; }
+
+.bg-gray-50 { background: #f7f8fa; }
+.bg-gray-100 { background: #f1f3f6; }
+.bg-gray-900 { background: #101418; }
+.bg-blue-50 { background: #eff7f4; }
+.bg-blue-500 { background: var(--accent); }
+.bg-blue-900 { background: #0f2f38; }
+
+.border { border: 1px solid var(--border); }
+.border-b { border-bottom: 1px solid var(--border); }
+.border-t { border-top: 1px solid var(--border); }
+.border-gray-200 { border-color: var(--border); }
+.border-blue-200 { border-color: #b6d2d9; }
+.border-blue-500 { border-color: var(--accent); }
+.border-l-4 { border-left-width: 4px; }
+
+.rounded { border-radius: 6px; }
+.rounded-lg { border-radius: var(--radius); }
+.rounded-full { border-radius: 999px; }
+
+.shadow-sm { box-shadow: 0 4px 10px rgba(16, 24, 40, 0.06); }
+.shadow-inner { box-shadow: inset 0 1px 4px rgba(16, 24, 40, 0.08); }
+.shadow-xl { box-shadow: var(--shadow); }
+.shadow-2xl { box-shadow: 0 18px 40px rgba(16, 24, 40, 0.15); }
+
+.list-decimal { list-style: decimal; }
+.overflow-x-auto { overflow-x: auto; }
+.whitespace-pre-wrap { white-space: pre-wrap; }
+.break-all { word-break: break-all; }
+
+.mb-2 { margin-bottom: 8px; }
+.mb-4 { margin-bottom: 16px; }
+.mb-6 { margin-bottom: 24px; }
+.mb-8 { margin-bottom: 32px; }
+.mb-12 { margin-bottom: 48px; }
+.mb-16 { margin-bottom: 64px; }
+.mt-0\.5 { margin-top: 2px; }
+.mt-2 { margin-top: 8px; }
+.mt-6 { margin-top: 24px; }
+.mt-8 { margin-top: 32px; }
+.mt-20 { margin-top: 80px; }
+.my-8 { margin-top: 32px; margin-bottom: 32px; }
+.mr-2 { margin-right: 8px; }
+.p-2 { padding: 8px; }
+.p-6 { padding: 24px; }
+.pb-2 { padding-bottom: 8px; }
+.pb-12 { padding-bottom: 48px; }
+.pt-8 { padding-top: 32px; }
+.pl-5 { padding-left: 20px; }
+
+.gap-4 { gap: 16px; }
+.gap-8 { gap: 32px; }
+
+.space-y-3 > * + * { margin-top: 12px; }
+.space-y-4 > * + * { margin-top: 16px; }
+.space-y-6 > * + * { margin-top: 24px; }
+
+.group:hover .copy-btn { background: var(--accent); color: #fff; }
+.hover\:text-blue-600:hover { color: var(--accent); }
+
+.grid-cols-1 { grid-template-columns: 1fr; }
+
+@media (min-width: 768px) {
+  .md\:block { display: block; }
+  .md\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .main-content { margin-left: 0; padding: 20px; }
+  .progress-container { left: 0; }
+}
