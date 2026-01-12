@@ -1,0 +1,1205 @@
+# Chinook Testergebnisse (SQL)
+
+Zusammengefuehrte Testausgaben aus `docs/db1.txt` und `docs/db2.txt`. Jeder Befehl ist mit Beschreibung und Shell-Output dokumentiert.
+
+## Tracks nach AlbumId filtern
+
+```
+myco> sql SELECT TrackId,Name FROM Track WHERE AlbumId=1
+cols=2 rows=9
+TrackId | Name
+1 | For Those About To Rock (We Salute You)
+6 | Put The Finger On You
+8 | Inject The Venom
+9 | Snowballed
+10 | Evil Walks
+11 | C.O.D.
+12 | Breaking The Rules
+13 | Night Of The Long Knives
+14 | Spellbound
+```
+
+## Track nach TrackId suchen
+
+```
+myco> sql SELECT TrackId,Name FROM Track WHERE TrackId=1
+cols=2 rows=1
+TrackId | Name
+1 | For Those About To Rock (We Salute You)
+```
+
+## Filter mit AND (AlbumId und GenreId)
+
+```
+myco> sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 AND GenreId=1
+cols=2 rows=9
+TrackId | Name
+1 | For Those About To Rock (We Salute You)
+6 | Put The Finger On You
+8 | Inject The Venom
+9 | Snowballed
+10 | Evil Walks
+11 | C.O.D.
+12 | Breaking The Rules
+13 | Night Of The Long Knives
+14 | Spellbound
+```
+
+## Filter mit OR (AlbumId 1 oder 2)
+
+```
+myco> sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 OR AlbumId=2
+cols=2 rows=10
+TrackId | Name
+1 | For Those About To Rock (We Salute You)
+2 | Balls to the Wall
+6 | Put The Finger On You
+8 | Inject The Venom
+9 | Snowballed
+10 | Evil Walks
+11 | C.O.D.
+12 | Breaking The Rules
+13 | Night Of The Long Knives
+14 | Spellbound
+```
+
+## NOT-Filter (GenreId ungleich 1)
+
+```
+myco> sql SELECT TrackId,Name FROM Track WHERE NOT GenreId=1
+cols=2 rows=0
+TrackId | Name
+```
+
+## IN-Liste (ArtistId)
+
+```
+myco> sql SELECT Name FROM Artist WHERE ArtistId IN (1,2,3,4)
+cols=1 rows=4
+Name
+AC/DC
+Accept
+Aerosmith
+Alanis Morissette
+```
+
+## BETWEEN-Filter (Milliseconds)
+
+```
+myco> sql SELECT TrackId,Name FROM Track WHERE Milliseconds BETWEEN 200000 AND 300000
+cols=2 rows=541
+TrackId | Name
+3 | Fast As a Shark
+4 | Restless and Wild
+6 | Put The Finger On You
+8 | Inject The Venom
+9 | Snowballed
+10 | Evil Walks
+12 | Breaking The Rules
+13 | Night Of The Long Knives
+14 | Spellbound
+16 | Dog Eat Dog
+18 | Bad Boy Boogie
+23 | Walk On Water
+25 | Rag Doll
+27 | Dude (Looks Like A Lady)
+31 | Blind Man
+32 | Deuces Are Wild
+33 | The Other Side
+35 | Eat The Rich
+38 | All I Really Want
+39 | You Oughta Know
+41 | Hand In My Pocket
+44 | You Learn
+45 | Head Over Feet
+46 | Mary Jane
+47 | Ironic
+48 | Not The Doctor
+49 | Wake Up
+52 | Man In The Box
+54 | Bleed The Freak
+58 | Sunshine
+61 | I Know Somethin (Bout You)
+62 | Real Thing
+64 | Garota De Ipanema
+67 | Ligia
+69 | Dindi (Dindi)
+71 | Falando De Amor
+73 | Corcovado (Quiet Nights Of Quiet Stars)
+76 | Canta, Canta Mais
+77 | Enter Sandman
+81 | Sad But True
+85 | Cochise
+86 | Show Me How to Live
+87 | Gasoline
+88 | What You Are
+89 | Like a Stone
+90 | Set It Off
+93 | Exploder
+94 | Hypnotize
+97 | Getaway Car
+99 | Your Time Has Come
+100 | Out Of Exile
+101 | Be Yourself
+103 | Drown Me Slowly
+105 | The Worm
+106 | Man Or Animal
+107 | Yesterday To Tomorrow
+108 | Dandelion
+109 | #1 Zero
+123 | Quadrant
+125 | Spanish moss-\"A sound portrait\"-Spanish moss
+126 | Moon germs
+129 | Solo-Panhandler
+130 | Do what cha wanna
+132 | 13 Years Of Grief
+134 | All For You
+136 | Phoney Smile Fake Hellos
+137 | Lost My Better Half
+138 | Bored To Tears
+139 | A.N.D.R.O.T.A.Z.
+140 | Born To Booze
+146 | Like A Bird
+147 | Blood In The Wall
+148 | The Beginning...At Last
+150 | The Wizard
+151 | Behind The Wall Of Sleep
+153 | Evil Woman
+155 | Warning
+158 | Changes
+160 | Supernaut
+162 | Cornucopia
+171 | Bowels Of The Devil
+179 | Evil Dick
+182 | Freedom Of Speech
+183 | King In Crimson
+184 | Chemical Wedding
+185 | The Tower
+186 | Killing Floor
+188 | Gates Of Urizen
+193 | Realword
+197 | Pretty Baby
+198 | When My Left Eye Jumps
+199 | Leave My Girl Alone
+209 | Eclipse Oculto
+216 | Esse Cara
+217 | Mel
+218 | Linha Do Equador
+220 | A Luz De Tieta
+222 | Vida Boa
+230 | Bye, Bye Brasil
+235 | Apesar De Você
+239 | Brejo Da Cruz
+240 | Meu Caro Amigo
+247 | O Cidadão Do Mundo
+250 | Macô
+251 | Um Passeio No Mundo Livre
+252 | Samba Do Lado
+253 | Maracatu Atômico
+255 | Corpo De Lama
+256 | Sobremesa
+263 | Criança De Domingo
+265 | Samidarish [Instrumental]
+266 | Maracatu Atômico [Atomic Version]
+267 | Maracatu Atômico [Ragga Mix]
+268 | Maracatu Atômico [Trip Hop]
+270 | Banditismo Por Uma Questa
+271 | Rios Pontes & Overdrives
+272 | Cidade
+274 | Samba Makossa
+275 | Da Lama Ao Caos
+277 | Salustiano Song
+278 | Antene Se
+282 | Girassol
+283 | A Sombra Da Maldade
+284 | Johnny B. Goode
+286 | Firmamento
+288 | O Erê
+289 | Podes Crer
+290 | A Estrada
+291 | Berlim
+292 | Já Foi
+293 | Onde Você Mora?
+295 | Conciliação
+297 | Mensagem
+298 | A Cor Do Sol
+299 | Onde Você Mora?
+300 | O Erê
+301 | A Sombra Da Maldade
+302 | A Estrada
+303 | Falar A Verdade
+304 | Firmamento
+306 | Realidade Virtual
+308 | Na Frente Da TV
+309 | Downtown
+310 | Sábado A Noite
+311 | A Cor Do Sol
+312 | Eu Também Quero Beijar
+314 | À Francesa
+315 | Cada Um Cada Um (A Namoradeira)
+316 | Linha Do Equador
+317 | Amor Demais
+318 | Férias
+319 | Gostava Tanto De Você
+320 | Flor Do Futuro
+321 | Felicidade Urgente
+322 | Livre Pra Viver
+323 | Dig-Dig, Lambe-Lambe (Ao Vivo)
+327 | Daniela
+328 | Bate Lata
+329 | Garotas do Brasil
+331 | Lavadeira
+332 | Reboladeira
+334 | Reggae Tchan
+335 | My Love
+342 | What is and Should Never Be
+351 | Debra Kadabra
+355 | 200 Years Old
+360 | Vai-Vai 2001
+361 | X-9 2001
+362 | Gavioes 2001
+363 | Nene 2001
+364 | Rosas De Ouro 2001
+365 | Mocidade Alegre 2001
+366 | Camisa Verde 2001
+367 | Leandro De Itaquera 2001
+368 | Tucuruvi 2001
+369 | Aguia De Ouro 2001
+370 | Ipiranga 2001
+371 | Morro Da Casa Verde 2001
+372 | Perola Negra 2001
+373 | Sao Lucas 2001
+374 | Guanabara
+375 | Mas Que Nada
+376 | Vôo Sobre o Horizonte
+377 | A Paz
+378 | Wave (Vou te Contar)
+380 | Samba da Bençaco
+382 | Menino do Rio
+386 | Menina Bonita
+387 | Pescador de Ilusões
+390 | Sambassim (dj patife remix)
+391 | Garota De Ipanema
+392 | Tim Tim Por Tim Tim
+396 | Alô Alô Marciano
+397 | Linha Do Horizonte
+399 | Abrir A Porta
+401 | Momentos Que Marcam
+402 | Um Jantar Pra Dois
+403 | Bumbo Da Mangueira
+404 | Mr Funk Samba
+406 | Por Você
+418 | The More I See
+419 | A Kind Of Magic
+420 | Under Pressure
+422 | I Want It All
+423 | I Want To Break Free
+426 | Breakthru
+427 | Who Wants To Live Forever
+428 | Headlong
+429 | The Miracle
+431 | The Invisible Man
+432 | Hammer To Fall
+433 | Friends Will Be Friends
+434 | The Show Must Go On
+435 | One Vision
+436 | Detroit Rock City
+438 | Hard Luck Woman
+439 | Sure Know Something
+443 | Shock Me
+444 | Do You Love Me
+445 | She
+446 | I Was Made For Loving You
+447 | Shout It Out Loud
+448 | God Of Thunder
+449 | Calling Dr. Love
+453 | Cold Gin
+454 | Plaster Caster
+456 | Heart of the Night
+458 | Westwood Moon
+459 | Midnight
+460 | Playtime
+461 | Surrender
+465 | When Evening Falls
+466 | J Squared
+467 | Best Thing
+470 | Longview
+471 | Welcome To Paradise
+486 | Warning
+491 | She Give Me ...
+494 | Slave
+495 | Cry For Love
+497 | Midnight Blue
+500 | Wherever You May Go
+501 | Grito De Alerta
+502 | Não Dá Mais Pra Segurar (Explode Coração)
+504 | O Que É O Que É ?
+506 | Diga Lá, Coração
+507 | Lindo Lago Do Amor
+509 | Com A Perna No Mundo
+510 | E Vamos À Luta
+511 | Um Homem Também Chora (Guerreiro Menino)
+514 | Espere Por Mim, Morena
+515 | Meia-Lua Inteira
+516 | Voce e Linda
+518 | Podres Poderes
+524 | Queixa
+529 | Balada Do Louco
+530 | Ando Meio Desligado
+535 | Chão De Estrelas
+540 | Posso Perder Minha Mulher, Minha Mãe, Desde Que Eu Tenha O Rock And Roll
+541 | Banho De Lua
+544 | Stormbringer
+546 | Lady Double Dealer
+550 | Custard Pie
+553 | Houses Of The Holy
+559 | Mocidade
+567 | Tradição
+569 | Tuiuti
+572 | Put Your Lights On
+573 | Africa Bamba
+574 | Smooth
+576 | Maria Maria
+578 | Corazon Espinado
+579 | Wishing It Was
+580 | El Farol
+583 | Solução
+584 | Manuel
+585 | Entre E Ouça
+586 | Um Contrato Com Deus
+587 | Um Jantar Pra Dois
+588 | Vamos Dançar
+590 | Seis Da Tarde
+592 | Sombras Do Meu Destino
+593 | Do You Have Other Loves?
+595 | Já!!!
+596 | A Rua
+600 | Tempus Fugit
+604 | New Rhumba
+606 | Summertime
+608 | The Pan Piper
+617 | Jean Pierre (Live)
+618 | Time After Time
+630 | Boogie Blues
+631 | How High The Moon
+638 | Imagination
+640 | Midget
+644 | Showcase
+650 | Canto De Ossanha
+651 | Pot-Pourri N.º 5
+653 | Como É Duro Trabalhar
+654 | Minha Namorada
+658 | Pot-Pourri N.º 2
+659 | Samba Em Prelúdio
+661 | Linha de Passe (João Bosco)
+663 | Chão de Giz (Elba Ramalho)
+665 | Aquarela (Toquinho)
+666 | Coração do Agreste (Fafá de Belém)
+667 | Dona (Roupa Nova)
+668 | Começaria Tudo Outra Vez (Maria Creuza)
+669 | Caçador de Mim (Sá & Guarabyra)
+670 | Romaria (Renato Teixeira)
+675 | Susie Q
+676 | I Put A Spell On You
+689 | Long As I Can See The Light
+694 | Someday Never Comes
+695 | Walking On The Water
+696 | Suzie-Q, Pt. 2
+699 | Tombstone Shadow
+700 | Wrote A Song For Everyone
+705 | The Midnight Special
+706 | Before You Accuse Me
+709 | (Wish I Could) Hideaway
+715 | Gatas Extraordinárias
+716 | Brasil
+717 | Eu Sou Neguinha (Ao Vivo)
+718 | Geração Coca-Cola (Ao Vivo)
+719 | Lanterna Dos Afogados
+720 | Coroné Antonio Bento
+721 | Você Passa, Eu Acho Graça (Ao Vivo)
+722 | Meu Mundo Fica Completo (Com Você)
+723 | 1° De Julho
+726 | Palavras Ao Vento
+728 | Woman Of The World (Ao Vivo)
+729 | Juventude Transviada (Ao Vivo)
+730 | Malandragem
+731 | O Segundo Sol
+733 | E.C.T.
+734 | Todo Amor Que Houver Nesta Vida
+738 | Admirável Gado Novo
+740 | Socorro
+741 | Blues Da Piedade
+742 | Rubens
+743 | Não Deixe O Samba Morrer - Cassia Eller e Alcione
+748 | Dealer
+749 | I Need Love
+750 | Drifter
+754 | Speed King
+755 | Bloodsucker
+758 | Into The Fire
+759 | Living Wreck
+761 | Fireball
+763 | Strange Kind Of Woman
+774 | The Unwritten Law
+775 | Call Of The Wild
+776 | Hush
+782 | Never Before
+786 | Vavoom : Ted The Mechanic
+788 | Soon Forgotten
+794 | A Touch Away
+796 | Somebody Stole My Guitar
+797 | The Purpendicular Waltz
+800 | Fire In The Basement
+803 | Love Conquers All
+805 | Too Much Is Not Enough
+807 | Stormbringer
+809 | Holy Man
+811 | Lady Double Dealer
+813 | High Ball Shooter
+814 | The Gypsy
+817 | Lick It Up
+819 | Talk About Love
+822 | A Twist In The Tail
+823 | Nasty Piece Of Work
+824 | Solitaire
+826 | Pour Some Sugar On Me
+827 | Photograph
+830 | Two Steps Behind [Acoustic Version]
+831 | Animal
+832 | Heaven Is
+833 | Rocket
+834 | When Love & Hate Collide
+835 | Action
+836 | Make Love Like A Man
+839 | Rock Of Ages
+847 | Plan B
+851 | Pétala
+852 | Meu Bem-Querer
+855 | Fato Consumado
+856 | Faltando Um Pedaço
+857 | Álibi
+858 | Esquinas
+859 | Se...
+861 | Lilás
+862 | Acelerou
+866 | Oceano
+867 | Açai
+868 | Serrado
+869 | Flor De Lis
+870 | Amar É Tudo
+871 | Azul
+872 | Seduzir
+874 | Sina
+875 | Acelerou
+877 | O Bêbado e a Equilibrista
+880 | Dois Pra Lá, Dois Pra Cá
+882 | Romaria
+883 | Alô, Alô, Marciano
+884 | Me Deixas Louca
+886 | Saudosa Maloca
+887 | As Aparências Enganam
+889 | Maria Rosa
+890 | Aprendendo A Jogar
+894 | Sunshine Of Your Love
+895 | Crossroads
+899 | Cocaine
+900 | I Shot The Sheriff
+902 | Swing Low Sweet Chariot
+903 | Lay Down Sally
+904 | Knockin On Heavens Door
+905 | Wonderful Tonight
+906 | Let It Grow
+910 | Before You Accuse Me
+912 | Tears In Heaven
+915 | Layla
+918 | Alberta
+919 | San Francisco Bay Blues
+920 | Malted Milk
+923 | Collision
+924 | Stripsearch
+925 | Last Cup Of Sorrow
+928 | Mouth To Mouth
+929 | Ashes To Ashes
+930 | She Loves Me Not
+932 | Paths Of Glory
+934 | Pristina
+935 | Land Of Sunshine
+936 | Caffeine
+937 | Midlife Crisis
+938 | RV
+941 | Malpractice
+942 | Kindergarten
+943 | Be Aggressive
+944 | A Small Victory
+945 | Crack Hitler
+947 | Midnight Cowboy
+950 | Ricochet
+951 | Evidence
+952 | The Gentle Art Of Making Enemies
+953 | Star A.D.
+954 | Cuckoo For Caca
+955 | Caralho Voador
+958 | Take This Bottle
+961 | The Last To Know
+964 | From Out Of Nowhere
+965 | Epic
+970 | Underwater Love
+971 | The Morning After
+974 | Edge Of The World
+976 | Falamansa Song
+977 | Xote Dos Milagres
+978 | Rindo À Toa
+979 | Confidência
+984 | Asas
+985 | Medo De Escuro
+986 | Oração
+989 | In Your Honor
+991 | Best Of You
+992 | DOA
+995 | Free Me
+996 | Resolve
+997 | The Deepest Blues Are Black
+1001 | Miracle
+1002 | Another Round
+1005 | On The Mend
+1006 | Virginia Moon
+1007 | Cold Day In The Sun
+1008 | Razor
+1009 | All My Life
+1010 | Low
+1011 | Have It All
+1012 | Times Like These
+1013 | Disenchanted Lullaby
+1016 | Lonely As You
+1017 | Overdrive
+1018 | Burn Away
+1021 | Monkey Wrench
+1022 | Hey, Johnny Park!
+1023 | My Poor Brain
+1026 | My Hero
+1029 | February Stars
+1030 | Everlong
+1033 | My Way
+1035 | New York, New York
+1048 | It Was A Very Good Year
+1054 | Mack The Knife
+1055 | Loves Been Good To Me
+1058 | Nervosa
+1059 | Funk De Bamba (Com Fernanda Abreu)
+1060 | Call Me At Cleo´s
+1063 | Funk Hum
+1064 | Forty Days (Com DJ Hum)
+1067 | Meu Guarda-Chuva
+1068 | Motéis
+1072 | Forty Days Instrumental
+1073 | Óia Eu Aqui De Novo
+1074 | Baião Da Penha
+1075 | Esperando Na Janela
+1076 | Juazeiro
+1077 | Último Pau-De-Arara
+1078 | Asa Branca
+1079 | Qui Nem Jiló
+1082 | A Volta Da Asa Branca
+1084 | As Pegadas Do Amor
+1085 | Lamento Sertanejo
+1088 | Palco (Live)
+1089 | Is This Love (Live)
+1090 | Stir It Up (Live)
+1091 | Refavela (Live)
+1092 | Vendedor De Caranguejo (Live)
+1094 | Estrela (Live)
+1095 | Pela Internet (Live)
+1096 | Cérebro Eletrônico (Live)
+1097 | Opachorô (Live)
+1098 | Copacabana (Live)
+1100 | Ghandi (Live)
+1101 | De Ouro E Marfim (Live)
+1103 | Lamento De Carnaval
+1104 | Pretinha
+1106 | Tenho Sede
+1107 | Refazenda
+1108 | Realce
+1111 | A Paz
+1112 | Beira Mar
+1113 | Sampa
+1114 | Parabolicamará
+1116 | Expresso 2222
+1117 | Aquele Abraço
+1118 | Palco
+1119 | Toda Menina Baiana
+1120 | Sítio Do Pica-Pau Amarelo
+1121 | Straight Out Of Line
+1122 | Faceless
+```
+
+## LIKE-Praefixsuche
+
+```
+myco> sql SELECT Name FROM Artist WHERE Name LIKE 'A%'
+cols=1 rows=26
+Name
+AC/DC
+Accept
+Aerosmith
+Alanis Morissette
+Alice In Chains
+Antônio Carlos Jobim
+Apocalyptica
+Audioslave
+Azymuth
+A Cor Do Som
+Aquaman
+Aerosmith & Sierra Leone\
+Avril Lavigne
+Aisha Duo
+Aaron Goldberg
+Alberto Turco & Nova Schola Gregoriana
+Anne-Sophie Mutter, Herbert Von Karajan & Wiener Philharmoniker
+Academy of St. Martin in the Fields & Sir Neville Marriner
+Academy of St. Martin in the Fields Chamber Ensemble & Sir Neville Marriner
+Academy of St. Martin in the Fields, John Birch, Sir Neville Marriner & Sylvia McNair
+Aaron Copland & London Symphony Orchestra
+Academy of St. Martin in the Fields, Sir Neville Marriner & William Bennett
+Antal Doráti & London Symphony Orchestra
+Amy Winehouse
+Academy of St. Martin in the Fields, Sir Neville Marriner & Thurston Dart
+Adrian Leaper & Doreen de Feis
+```
+
+## REGEXP-Praefixsuche
+
+```
+myco> sql SELECT Name FROM Artist WHERE Name REGEXP '^A'
+cols=1 rows=26
+Name
+AC/DC
+Accept
+Aerosmith
+Alanis Morissette
+Alice In Chains
+Antônio Carlos Jobim
+Apocalyptica
+Audioslave
+Azymuth
+A Cor Do Som
+Aquaman
+Aerosmith & Sierra Leone\
+Avril Lavigne
+Aisha Duo
+Aaron Goldberg
+Alberto Turco & Nova Schola Gregoriana
+Anne-Sophie Mutter, Herbert Von Karajan & Wiener Philharmoniker
+Academy of St. Martin in the Fields & Sir Neville Marriner
+Academy of St. Martin in the Fields Chamber Ensemble & Sir Neville Marriner
+Academy of St. Martin in the Fields, John Birch, Sir Neville Marriner & Sylvia McNair
+Aaron Copland & London Symphony Orchestra
+Academy of St. Martin in the Fields, Sir Neville Marriner & William Bennett
+Antal Doráti & London Symphony Orchestra
+Amy Winehouse
+Academy of St. Martin in the Fields, Sir Neville Marriner & Thurston Dart
+Adrian Leaper & Doreen de Feis
+```
+
+## IS NOT NULL mit LIMIT
+
+```
+myco> sql SELECT Name FROM Artist WHERE Name IS NOT NULL LIMIT 5
+cols=1 rows=5
+Name
+AC/DC
+Accept
+Aerosmith
+Alanis Morissette
+Alice In Chains
+```
+
+## ORDER BY numerisch (TrackId)
+
+```
+myco> sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId
+cols=2 rows=9
+TrackId | Name
+1 | For Those About To Rock (We Salute You)
+6 | Put The Finger On You
+8 | Inject The Venom
+9 | Snowballed
+10 | Evil Walks
+11 | C.O.D.
+12 | Breaking The Rules
+13 | Night Of The Long Knives
+14 | Spellbound
+```
+
+## ORDER BY DESC mit LIMIT
+
+```
+myco> sql SELECT TrackId,Name FROM Track WHERE AlbumId=1 ORDER BY TrackId DESC LIMIT 5
+cols=2 rows=5
+TrackId | Name
+14 | Spellbound
+13 | Night Of The Long Knives
+12 | Breaking The Rules
+11 | C.O.D.
+10 | Evil Walks
+```
+
+## LIMIT/OFFSET
+
+```
+myco> sql SELECT TrackId,Name FROM Track ORDER BY TrackId LIMIT 5 OFFSET 5
+cols=2 rows=5
+TrackId | Name
+6 | Put The Finger On You
+7 | Let\
+8 | Inject The Venom
+9 | Snowballed
+10 | Evil Walks
+```
+
+## ORDER BY Spaltenindex
+
+```
+myco> sql SELECT TrackId,Name FROM Track ORDER BY 1 LIMIT 5
+cols=2 rows=5
+TrackId | Name
+1 | For Those About To Rock (We Salute You)
+2 | Balls to the Wall
+3 | Fast As a Shark
+4 | Restless and Wild
+5 | Princess of the Dawn
+```
+
+## DISTINCT + ORDER BY
+
+```
+myco> sql SELECT DISTINCT GenreId FROM Track ORDER BY GenreId LIMIT 10
+cols=1 rows=10
+GenreId
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+```
+
+## GROUP BY + HAVING mit Alias
+
+```
+myco> sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING C > 5 ORDER BY C DESC LIMIT 10
+cols=2 rows=10
+AlbumId | C
+23 | 33
+73 | 27
+24 | 23
+83 | 21
+39 | 19
+21 | 18
+51 | 18
+37 | 18
+72 | 17
+34 | 17
+```
+
+## AVG Aggregat
+
+```
+myco> sql SELECT GenreId, AVG(Milliseconds) AS AvgMs FROM Track GROUP BY GenreId ORDER BY AvgMs DESC LIMIT 5
+cols=2 rows=5
+GenreId | AvgMs
+Taylor Rhodes' | 10056995.000000
+3 | 316236.593750
+2 | 292927.121951
+1 | 287556.207430
+10 | 243294.678571
+```
+
+## SUM Aggregat
+
+```
+myco> sql SELECT AlbumId, SUM(Milliseconds) AS SumMs FROM Track GROUP BY AlbumId ORDER BY SumMs DESC LIMIT 5
+cols=2 rows=5
+AlbumId | SumMs
+Steven Tyler | 10056995.000000
+23 | 7722435.000000
+73 | 7403243.000000
+46 | 4500551.000000
+49 | 4398808.000000
+```
+
+## MIN/MAX Aggregate
+
+```
+myco> sql SELECT AlbumId, MIN(Milliseconds) AS MinMs, MAX(Milliseconds) AS MaxMs FROM Track GROUP BY AlbumId LIMIT 5
+cols=3 rows=5
+AlbumId | MinMs | MaxMs
+36 |  | 387761
+1 |  | 343719
+35 |  | 671712
+s search-Red baron' |  | Billy Cobham
+2 |  | 342562
+```
+
+## INNER JOIN mit Filter
+
+```
+myco> sql SELECT t.Name, a.Title FROM Track t JOIN Album a ON t.AlbumId=a.AlbumId WHERE t.TrackId=13
+cols=2 rows=1
+t.Name | a.Title
+Night Of The Long Knives | For Those About To Rock We Salute You
+```
+
+## LEFT JOIN mit Filter
+
+```
+myco> sql SELECT t.Name, a.Title FROM Track t LEFT JOIN Album a ON t.AlbumId=a.AlbumId WHERE a.AlbumId=1
+cols=2 rows=9
+t.Name | a.Title
+For Those About To Rock (We Salute You) | For Those About To Rock We Salute You
+Put The Finger On You | For Those About To Rock We Salute You
+Inject The Venom | For Those About To Rock We Salute You
+Snowballed | For Those About To Rock We Salute You
+Evil Walks | For Those About To Rock We Salute You
+C.O.D. | For Those About To Rock We Salute You
+Breaking The Rules | For Those About To Rock We Salute You
+Night Of The Long Knives | For Those About To Rock We Salute You
+Spellbound | For Those About To Rock We Salute You
+```
+
+## RIGHT JOIN mit Filter
+
+```
+myco> sql SELECT t.Name, a.Title FROM Track t RIGHT JOIN Album a ON t.AlbumId=a.AlbumId WHERE a.AlbumId=1
+cols=2 rows=9
+t.Name | a.Title
+For Those About To Rock (We Salute You) | For Those About To Rock We Salute You
+Put The Finger On You | For Those About To Rock We Salute You
+Inject The Venom | For Those About To Rock We Salute You
+Snowballed | For Those About To Rock We Salute You
+Evil Walks | For Those About To Rock We Salute You
+C.O.D. | For Those About To Rock We Salute You
+Breaking The Rules | For Those About To Rock We Salute You
+Night Of The Long Knives | For Those About To Rock We Salute You
+Spellbound | For Those About To Rock We Salute You
+```
+
+## GROUP BY + HAVING mit COUNT(*)
+
+```
+myco> sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING COUNT(*) > 5 ORDER BY C DESC LIMIT 5
+cols=2 rows=5
+AlbumId | C
+23 | 33
+73 | 27
+24 | 23
+83 | 21
+39 | 19
+```
+
+## LOWER Funktion
+
+```
+myco> sql SELECT LOWER(Name) AS n FROM Artist ORDER BY n LIMIT 5
+cols=1 rows=5
+n
+a cor do som
+aaron copland & london symphony orchestra
+aaron goldberg
+ac/dc
+academy of st. martin in the fields & sir neville marriner
+```
+
+## UPPER Funktion
+
+```
+myco> sql SELECT UPPER(Name) AS n FROM Artist ORDER BY n LIMIT 5
+cols=1 rows=5
+n
+A COR DO SOM
+AARON COPLAND & LONDON SYMPHONY ORCHESTRA
+AARON GOLDBERG
+AC/DC
+ACADEMY OF ST. MARTIN IN THE FIELDS & SIR NEVILLE MARRINER
+```
+
+## LENGTH Funktion
+
+```
+myco> sql SELECT LENGTH(Name) AS L FROM Artist ORDER BY L DESC LIMIT 5
+cols=1 rows=5
+L
+85
+82
+76
+75
+75
+```
+
+## SUBSTRING Funktion
+
+```
+myco> sql SELECT SUBSTRING(Name,1,5) AS S FROM Artist ORDER BY S LIMIT 5
+cols=1 rows=5
+S
+A Cor
+AC/DC
+Aaron
+Aaron
+Acade
+```
+
+## CONCAT Funktion
+
+```
+myco> sql SELECT CONCAT(FirstName,' ',LastName) AS FullName FROM employee ORDER BY FullName LIMIT 5
+cols=1 rows=5
+FullName
+Andrew Adams
+Jane Peacock
+Laura Callahan
+Margaret Park
+Michael Mitchell
+```
+
+## EXISTS mit korrelierter Subquery
+
+```
+myco> sql SELECT Name FROM Artist a WHERE EXISTS (SELECT AlbumId FROM Album WHERE Album.ArtistId=a.ArtistId)
+cols=1 rows=49
+Name
+AC/DC
+Accept
+Aerosmith
+Alanis Morissette
+Alice In Chains
+Antônio Carlos Jobim
+Apocalyptica
+Audioslave
+BackBeat
+Billy Cobham
+Black Label Society
+Black Sabbath
+Body Count
+Bruce Dickinson
+Buddy Guy
+Caetano Veloso
+Chico Buarque
+Chico Science & Nação Zumbi
+Cidade Negra
+Cláudio Zoli
+Various Artists
+Led Zeppelin
+Frank Zappa & Captain Beefheart
+Marcos Valle
+Gilberto Gil
+Ed Motta
+Elis Regina
+Metallica
+Queen
+Kiss
+Spyro Gyra
+Green Day
+David Coverdale
+Gonzaguinha
+Os Mutantes
+Deep Purple
+Santana
+Miles Davis
+Toquinho & Vinícius
+Creedence Clearwater Revival
+Cássia Eller
+Dennis Chambers
+Djavan
+Eric Clapton
+Faith No More
+Falamansa
+Foo Fighters
+Frank Sinatra
+Funk Como Le Gusta
+
+PS C:\Users\ralfk\Downloads\superpromt\micro_DB\build\Release> .\micro_swarm.exe --mode db_shell --db chinook_optimized.myco --db-radius 1500
+myco shell bereit. 'help' fuer Befehle, 'exit' zum Beenden.
+```
+
+## CTE (WITH) und Selektion
+
+```
+myco> sql WITH top_albums AS (SELECT AlbumId FROM Track GROUP BY AlbumId HAVING COUNT(*) > 5) SELECT AlbumId FROM top_albums ORDER BY AlbumId
+cols=1 rows=80
+AlbumId
+1
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+16
+17
+18
+19
+20
+21
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+```
+
+## GROUP BY + HAVING mit COUNT(*)
+
+```
+myco> sql SELECT AlbumId, COUNT(*) AS C FROM Track GROUP BY AlbumId HAVING COUNT(*) > 5 ORDER BY C DESC LIMIT 5
+cols=2 rows=5
+AlbumId | C
+23 | 33
+73 | 27
+24 | 23
+83 | 21
+39 | 19
+```
+
+## Subquery im FROM
+
+```
+myco> sql SELECT * FROM (SELECT ArtistId, Name FROM Artist) a WHERE a.ArtistId=1
+cols=4 rows=1
+artistid | a.artistid | name | a.name
+1 | 1 | AC/DC | AC/DC
+```
+
+## Mehrere Spalten fuer AlbumId
+
+```
+myco> sql SELECT TrackId,Name,Milliseconds FROM Track WHERE AlbumId=1
+cols=3 rows=9
+TrackId | Name | Milliseconds
+1 | For Those About To Rock (We Salute You) | 343719
+6 | Put The Finger On You | 205662
+8 | Inject The Venom | 210834
+9 | Snowballed | 203102
+10 | Evil Walks | 263497
+11 | C.O.D. | 199836
+12 | Breaking The Rules | 263288
+13 | Night Of The Long Knives | 205688
+14 | Spellbound | 270863
+```
+
+## Shell-Sort numerisch nach Milliseconds
+
+```
+myco> sort Milliseconds num
+cols=3 rows=9
+TrackId | Name | Milliseconds
+11 | C.O.D. | 199836
+9 | Snowballed | 203102
+6 | Put The Finger On You | 205662
+13 | Night Of The Long Knives | 205688
+8 | Inject The Venom | 210834
+12 | Breaking The Rules | 263288
+10 | Evil Walks | 263497
+14 | Spellbound | 270863
+1 | For Those About To Rock (We Salute You) | 343719
+```
+
+## Shell-Sort mehrspaltig (TrackId desc, Name asc)
+
+```
+myco> sort TrackId desc num, Name asc
+cols=3 rows=9
+TrackId | Name | Milliseconds
+14 | Spellbound | 270863
+13 | Night Of The Long Knives | 205688
+12 | Breaking The Rules | 263288
+11 | C.O.D. | 199836
+10 | Evil Walks | 263497
+9 | Snowballed | 203102
+8 | Inject The Venom | 210834
+6 | Put The Finger On You | 205662
+1 | For Those About To Rock (We Salute You) | 343719
+```
+
+## Shell-Sort zuruecksetzen
+
+```
+myco> sort reset
+cols=3 rows=9
+TrackId | Name | Milliseconds
+1 | For Those About To Rock (We Salute You) | 343719
+6 | Put The Finger On You | 205662
+8 | Inject The Venom | 210834
+9 | Snowballed | 203102
+10 | Evil Walks | 263497
+11 | C.O.D. | 199836
+12 | Breaking The Rules | 263288
+13 | Night Of The Long Knives | 205688
+14 | Spellbound | 270863
+```
+
