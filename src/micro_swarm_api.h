@@ -17,8 +17,8 @@ extern "C" {
 #endif
 
 #define MS_API_VERSION_MAJOR 1
-#define MS_API_VERSION_MINOR 3
-#define MS_API_VERSION_PATCH 2
+#define MS_API_VERSION_MINOR 5
+#define MS_API_VERSION_PATCH 0
 
 typedef struct ms_handle_t ms_handle_t;
 typedef struct ms_db_handle_t ms_db_handle_t;
@@ -30,6 +30,13 @@ typedef enum ms_field_kind {
     MS_FIELD_MOLECULES = 3,
     MS_FIELD_MYCEL = 4
 } ms_field_kind;
+
+typedef enum ms_logic_mode {
+    MS_LOGIC_NONE = 0,
+    MS_LOGIC_XOR = 1,
+    MS_LOGIC_AND = 2,
+    MS_LOGIC_OR = 3
+} ms_logic_mode;
 
 typedef struct ms_params_t {
     int width;
@@ -51,12 +58,17 @@ typedef struct ms_params_t {
     float mycel_drive_threshold;
     float mycel_drive_p;
     float mycel_drive_r;
+    float mycel_inhibitor_weight;
+    float mycel_inhibitor_gain;
+    float mycel_inhibitor_decay;
+    float mycel_inhibitor_threshold;
 
     float agent_move_cost;
     float agent_harvest;
     float agent_deposit_scale;
     float agent_sense_radius;
     float agent_random_turn;
+    float info_metabolism_cost;
 
     int dna_capacity;
     int dna_global_capacity;
@@ -76,6 +88,26 @@ typedef struct ms_params_t {
     float evo_age_decay;
 
     float global_spawn_frac;
+
+    int toxic_enable;
+    float toxic_max_fraction;
+    int toxic_stride_min;
+    int toxic_stride_max;
+    int toxic_iters_min;
+    int toxic_iters_max;
+
+    float toxic_max_fraction_by_quadrant[4];
+    float toxic_max_fraction_by_species[4];
+
+    int logic_mode;
+    int logic_input_ax;
+    int logic_input_ay;
+    int logic_input_bx;
+    int logic_input_by;
+    int logic_output_x;
+    int logic_output_y;
+    int logic_pulse_period;
+    float logic_pulse_strength;
 } ms_params_t;
 
 typedef struct ms_config_t {

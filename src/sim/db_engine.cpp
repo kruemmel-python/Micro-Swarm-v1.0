@@ -1912,6 +1912,22 @@ std::vector<int> db_execute_query(const DbWorld &world, const DbQuery &q, int ra
             out.push_back(dit->second);
             return out;
         }
+        auto it = world.payload_positions.find(key);
+        if (it != world.payload_positions.end() && world.width > 0 && world.height > 0) {
+            int px = it->second.first;
+            int py = it->second.second;
+            if (px >= 0 && py >= 0 && px < world.width && py < world.height) {
+                int idx = world.cell_payload[static_cast<size_t>(py) * world.width + px];
+                if (idx >= 0 && idx < static_cast<int>(world.payloads.size())) {
+                    const DbPayload &p = world.payloads[static_cast<size_t>(idx)];
+                    if (!p.is_delta && p.table_id == table_id && p.id == target_id &&
+                        !payload_tombstoned(world, key)) {
+                        out.push_back(idx);
+                        return out;
+                    }
+                }
+            }
+        }
     }
     std::vector<int> base_hits;
     for (size_t i = 0; i < world.payloads.size(); ++i) {
@@ -2015,6 +2031,22 @@ std::vector<int> db_execute_query_focus(const DbWorld &world, const DbQuery &q, 
         if (dit != world.delta_index_by_key.end() && !payload_tombstoned(world, key)) {
             out.push_back(dit->second);
             return out;
+        }
+        auto it = world.payload_positions.find(key);
+        if (it != world.payload_positions.end() && world.width > 0 && world.height > 0) {
+            int px = it->second.first;
+            int py = it->second.second;
+            if (px >= 0 && py >= 0 && px < world.width && py < world.height) {
+                int idx = world.cell_payload[static_cast<size_t>(py) * world.width + px];
+                if (idx >= 0 && idx < static_cast<int>(world.payloads.size())) {
+                    const DbPayload &p = world.payloads[static_cast<size_t>(idx)];
+                    if (!p.is_delta && p.table_id == table_id && p.id == target_id &&
+                        !payload_tombstoned(world, key)) {
+                        out.push_back(idx);
+                        return out;
+                    }
+                }
+            }
         }
     }
     for (size_t i = 0; i < world.payloads.size(); ++i) {

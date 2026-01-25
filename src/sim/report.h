@@ -7,6 +7,7 @@ struct SystemMetrics {
     int step = 0;
     int dna_pool_size = 0;
     float avg_agent_energy = 0.0f;
+    float avg_cognitive_load = 0.0f;
     int dna_global_size = 0;
     int dna_species_sizes[4] = {0, 0, 0, 0};
     float avg_energy_by_species[4] = {0.0f, 0.0f, 0.0f, 0.0f};

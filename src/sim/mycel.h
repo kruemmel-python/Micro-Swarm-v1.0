@@ -5,6 +5,7 @@
 
 struct MycelNetwork {
     GridField density;
+    GridField inhibitor;
     int width = 0;
     int height = 0;
 

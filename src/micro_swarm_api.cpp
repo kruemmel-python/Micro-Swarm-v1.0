@@ -39,6 +39,7 @@ struct MicroSwarmContext {
     Environment env;
     GridField phero_food;
     GridField phero_danger;
+    GridField phero_gamma;
     GridField molecules;
     MycelNetwork mycel;
 
@@ -51,6 +52,11 @@ struct MicroSwarmContext {
     bool ocl_no_copyback = false;
     int ocl_platform = 0;
     int ocl_device = 0;
+    bool last_physics_valid = true;
+    int logic_case = 0;
+    int logic_active_case = 0;
+    float logic_last_score = 0.5f;
+    float logic_path_radius = 4.0f;
 
     explicit MicroSwarmContext(uint32_t seed_in)
         : seed(seed_in),
@@ -58,6 +64,7 @@ struct MicroSwarmContext {
           env(0, 0),
           phero_food(0, 0, 0.0f),
           phero_danger(0, 0, 0.0f),
+          phero_gamma(0, 0, 0.0f),
           molecules(0, 0, 0.0f),
           mycel(0, 0) {}
 };
@@ -83,6 +90,83 @@ int copy_string(char *dst, int dst_size, const std::string &value) {
     std::memcpy(dst, value.data(), static_cast<size_t>(copy_len));
     dst[copy_len] = '\0';
     return 1;
+}
+
+float clamp01(float v) {
+    if (v < 0.0f) return 0.0f;
+    if (v > 1.0f) return 1.0f;
+    return v;
+}
+
+float clamp_range(float v, float lo, float hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+float gaussian(Rng &rng, float sigma) {
+    if (sigma <= 0.0f) return 0.0f;
+    float u1 = std::max(1e-6f, rng.uniform(0.0f, 1.0f));
+    float u2 = rng.uniform(0.0f, 1.0f);
+    float mag = std::sqrt(-2.0f * std::log(u1));
+    float z0 = mag * std::cos(6.283185307f * u2);
+    return z0 * sigma;
+}
+
+void randomize_semantics(Rng &rng, Genome &g) {
+    g.response_matrix[0] = 1.0f + rng.uniform(-0.3f, 0.3f);
+    g.response_matrix[1] = -1.0f + rng.uniform(-0.3f, 0.3f);
+    g.response_matrix[2] = 0.0f + rng.uniform(-0.3f, 0.3f);
+    g.emission_matrix[0] = 1.0f + rng.uniform(-0.3f, 0.3f);
+    g.emission_matrix[1] = 0.0f + rng.uniform(-0.3f, 0.3f);
+    g.emission_matrix[2] = 0.0f + rng.uniform(-0.3f, 0.3f);
+    g.emission_matrix[3] = 1.0f + rng.uniform(-0.3f, 0.3f);
+}
+
+void apply_semantic_defaults(Genome &g, const SpeciesProfile &profile) {
+    g.response_matrix[0] = clamp_range(profile.food_attraction_mul, -1.5f, 1.5f);
+    g.response_matrix[1] = clamp_range(-profile.danger_aversion_mul, -1.5f, 1.5f);
+    g.response_matrix[2] = 0.0f;
+    g.emission_matrix[0] = clamp_range(profile.deposit_food_mul, -1.5f, 1.5f);
+    g.emission_matrix[1] = 0.0f;
+    g.emission_matrix[2] = 0.0f;
+    g.emission_matrix[3] = clamp_range(profile.deposit_danger_mul, -1.5f, 1.5f);
+}
+
+int logic_target_for_case(int mode, int case_idx) {
+    int a = (case_idx >> 0) & 1;
+    int b = (case_idx >> 1) & 1;
+    switch (mode) {
+        case 1: return a ^ b;
+        case 2: return a & b;
+        case 3: return (a | b);
+        default: return 0;
+    }
+}
+
+float distance_to_segment(float ax, float ay, float bx, float by, float px, float py) {
+    float vx = bx - ax;
+    float vy = by - ay;
+    float wx = px - ax;
+    float wy = py - ay;
+    float c1 = vx * wx + vy * wy;
+    if (c1 <= 0.0f) {
+        float dx = px - ax;
+        float dy = py - ay;
+        return std::sqrt(dx * dx + dy * dy);
+    }
+    float c2 = vx * vx + vy * vy;
+    if (c2 <= c1) {
+        float dx = px - bx;
+        float dy = py - by;
+        return std::sqrt(dx * dx + dy * dy);
+    }
+    float t = c1 / c2;
+    float projx = ax + t * vx;
+    float projy = ay + t * vy;
+    float dx = px - projx;
+    float dy = py - projy;
+    return std::sqrt(dx * dx + dy * dy);
 }
 
 void invalidate_delta_cache(MicroSwarmDbContext *ctx) {
@@ -200,6 +284,19 @@ void clamp_genome(Genome &g) {
     g.sense_gain = std::min(3.0f, std::max(0.2f, g.sense_gain));
     g.pheromone_gain = std::min(3.0f, std::max(0.2f, g.pheromone_gain));
     g.exploration_bias = std::min(1.0f, std::max(0.0f, g.exploration_bias));
+    g.response_matrix[0] = std::min(2.0f, std::max(-2.0f, g.response_matrix[0]));
+    g.response_matrix[1] = std::min(2.0f, std::max(-2.0f, g.response_matrix[1]));
+    g.response_matrix[2] = std::min(2.0f, std::max(-2.0f, g.response_matrix[2]));
+    for (int i = 0; i < 4; ++i) {
+        g.emission_matrix[i] = std::min(2.0f, std::max(-2.0f, g.emission_matrix[i]));
+    }
+    for (int i = 0; i < 4; ++i) {
+        g.kernel_codons[i] = std::min(7, std::max(0, g.kernel_codons[i]));
+    }
+    g.lws_x = std::min(32, std::max(0, g.lws_x));
+    g.lws_y = std::min(32, std::max(0, g.lws_y));
+    g.toxic_stride = std::min(64, std::max(1, g.toxic_stride));
+    g.toxic_iters = std::min(256, std::max(0, g.toxic_iters));
 }
 
 struct FieldStatsLocal {
@@ -268,11 +365,57 @@ GridField *select_field(MicroSwarmContext *ctx, ms_field_kind kind) {
 void init_agents(MicroSwarmContext *ctx) {
     ctx->agents.clear();
     ctx->agents.reserve(ctx->params.agent_count);
+    const int codon_max = 7;
+    const int lws_min = 0;
+    const int lws_max = 32;
+    const int toxic_stride_min = std::max(1, ctx->params.toxic_stride_min);
+    const int toxic_stride_max = std::max(toxic_stride_min, ctx->params.toxic_stride_max);
+    const int toxic_iters_min = std::max(0, ctx->params.toxic_iters_min);
+    const int toxic_iters_max = std::max(toxic_iters_min, ctx->params.toxic_iters_max);
+    const bool toxic_enabled = ctx->params.toxic_enable != 0;
+    auto randomize_codons = [&](Genome &g) {
+        for (int i = 0; i < 4; ++i) {
+            g.kernel_codons[i] = ctx->rng.uniform_int(0, codon_max);
+        }
+        g.lws_x = ctx->rng.uniform_int(lws_min, lws_max);
+        g.lws_y = ctx->rng.uniform_int(lws_min, lws_max);
+        g.toxic_stride = ctx->rng.uniform_int(toxic_stride_min, toxic_stride_max);
+        g.toxic_iters = ctx->rng.uniform_int(toxic_iters_min, toxic_iters_max);
+        if (!toxic_enabled) {
+            g.toxic_iters = 0;
+        }
+    };
+    auto mutate_codons = [&](Genome &g, float prob) {
+        if (prob <= 0.0f) return;
+        for (int i = 0; i < 4; ++i) {
+            if (ctx->rng.uniform(0.0f, 1.0f) < prob) {
+                g.kernel_codons[i] = ctx->rng.uniform_int(0, codon_max);
+            }
+        }
+        if (ctx->rng.uniform(0.0f, 1.0f) < prob) {
+            g.lws_x = ctx->rng.uniform_int(lws_min, lws_max);
+        }
+        if (ctx->rng.uniform(0.0f, 1.0f) < prob) {
+            g.lws_y = ctx->rng.uniform_int(lws_min, lws_max);
+        }
+        if (ctx->rng.uniform(0.0f, 1.0f) < prob) {
+            g.toxic_stride = ctx->rng.uniform_int(toxic_stride_min, toxic_stride_max);
+        }
+        if (ctx->rng.uniform(0.0f, 1.0f) < prob) {
+            g.toxic_iters = ctx->rng.uniform_int(toxic_iters_min, toxic_iters_max);
+        }
+        if (!toxic_enabled) {
+            g.toxic_iters = 0;
+        }
+    };
     auto random_genome = [&]() -> Genome {
         Genome g;
         g.sense_gain = ctx->rng.uniform(0.6f, 1.4f);
         g.pheromone_gain = ctx->rng.uniform(0.6f, 1.4f);
         g.exploration_bias = ctx->rng.uniform(0.2f, 0.8f);
+        randomize_semantics(ctx->rng, g);
+        randomize_codons(g);
+        clamp_genome(g);
         return g;
     };
     auto apply_role_mutation = [&](Genome &g, const SpeciesProfile &profile) {
@@ -285,6 +428,13 @@ void init_agents(MicroSwarmContext *ctx) {
         if (delta > 0.0f) {
             g.exploration_bias += ctx->rng.uniform(-delta, delta);
         }
+        g.response_matrix[0] += gaussian(ctx->rng, sigma);
+        g.response_matrix[1] += gaussian(ctx->rng, sigma);
+        g.response_matrix[2] += gaussian(ctx->rng, sigma);
+        for (int i = 0; i < 4; ++i) {
+            g.emission_matrix[i] += gaussian(ctx->rng, sigma);
+        }
+        mutate_codons(g, std::min(0.5f, sigma * 2.0f));
         clamp_genome(g);
     };
     auto sample_genome = [&](int species) -> Genome {
@@ -300,6 +450,7 @@ void init_agents(MicroSwarmContext *ctx) {
             }
         } else {
             g = random_genome();
+            apply_semantic_defaults(g, profile);
         }
         if (ctx->evo.enabled) {
             apply_role_mutation(g, profile);
@@ -326,16 +477,33 @@ void init_agents(MicroSwarmContext *ctx) {
 void init_fields(MicroSwarmContext *ctx) {
     ctx->env = Environment(ctx->params.width, ctx->params.height);
     ctx->env.seed_resources(ctx->rng);
+    // phero_food/phero_danger act as semantic channels Alpha/Beta (kept names for compatibility).
     ctx->phero_food = GridField(ctx->params.width, ctx->params.height, 0.0f);
     ctx->phero_danger = GridField(ctx->params.width, ctx->params.height, 0.0f);
+    ctx->phero_gamma = GridField(ctx->params.width, ctx->params.height, 0.0f);
     ctx->molecules = GridField(ctx->params.width, ctx->params.height, 0.0f);
     ctx->mycel = MycelNetwork(ctx->params.width, ctx->params.height);
+    if (ctx->params.logic_input_ax < 0 || ctx->params.logic_input_ay < 0 ||
+        ctx->params.logic_input_bx < 0 || ctx->params.logic_input_by < 0) {
+        ctx->params.logic_input_ax = ctx->params.width / 4;
+        ctx->params.logic_input_ay = ctx->params.height / 4;
+        ctx->params.logic_input_bx = ctx->params.width / 4;
+        ctx->params.logic_input_by = (ctx->params.height * 3) / 4;
+    }
+    if (ctx->params.logic_output_x < 0 || ctx->params.logic_output_y < 0) {
+        ctx->params.logic_output_x = (ctx->params.width * 3) / 4;
+        ctx->params.logic_output_y = ctx->params.height / 2;
+    }
+    ctx->logic_case = 0;
+    ctx->logic_active_case = 0;
+    ctx->logic_last_score = 0.5f;
+    ctx->logic_path_radius = std::max(2.0f, std::min(ctx->params.width, ctx->params.height) * 0.05f);
 }
 
 bool ensure_host_fields(MicroSwarmContext *ctx) {
     if (ctx->ocl_active && ctx->ocl_no_copyback) {
         std::string error;
-        if (!ctx->ocl.copyback(ctx->phero_food, ctx->phero_danger, ctx->molecules, error)) {
+        if (!ctx->ocl.copyback(ctx->phero_food, ctx->phero_danger, ctx->phero_gamma, ctx->molecules, error)) {
             return false;
         }
     }
@@ -347,72 +515,110 @@ void step_once(MicroSwarmContext *ctx) {
     }
     FieldParams pheromone_params{ctx->params.pheromone_evaporation, ctx->params.pheromone_diffusion};
     FieldParams molecule_params{ctx->params.molecule_evaporation, ctx->params.molecule_diffusion};
-
-    for (auto &agent : ctx->agents) {
-        const SpeciesProfile &profile = ctx->profiles[agent.species];
-        agent.step(ctx->rng,
-                   ctx->params,
-                   ctx->evo.enabled ? ctx->evo.fitness_window : 0,
-                   profile,
-                   ctx->phero_food,
-                   ctx->phero_danger,
-                   ctx->molecules,
-                   ctx->env.resources,
-                   ctx->mycel.density);
-        if (ctx->evo.enabled) {
-            if (agent.energy > ctx->evo_min_energy_to_store) {
-                ctx->dna_species[agent.species].add(ctx->params, agent.genome, agent.fitness_value, ctx->evo, ctx->params.dna_capacity);
-                float eps = 1e-6f;
-                if (ctx->params.dna_global_capacity > 0) {
-                    if (ctx->dna_global.entries.size() < static_cast<size_t>(ctx->params.dna_global_capacity) ||
-                        agent.fitness_value > ctx->dna_global.entries.back().fitness + eps) {
-                        ctx->dna_global.add(ctx->params, agent.genome, agent.fitness_value, ctx->evo, ctx->params.dna_global_capacity);
-                    }
+    auto field_sum = [](const GridField &field) -> double {
+        double sum = 0.0;
+        for (float v : field.data) {
+            sum += static_cast<double>(v);
+        }
+        return sum;
+    };
+    auto compute_stagnation = [&]() -> float {
+        if (!ctx->dna_global.entries.empty()) {
+            return calculate_genetic_stagnation(ctx->dna_global.entries);
+        }
+        std::vector<DNAEntry> merged;
+        for (const auto &pool : ctx->dna_species) {
+            merged.insert(merged.end(), pool.entries.begin(), pool.entries.end());
+        }
+        if (merged.empty()) {
+            return 1.0f;
+        }
+        return calculate_genetic_stagnation(merged);
+    };
+    auto inject_gamma = [&](float base, const float quad_ns[4]) {
+        if (base > 0.0f) {
+            for (float &v : ctx->phero_gamma.data) {
+                v += base;
+            }
+        }
+        int mid_x = ctx->params.width / 2;
+        int mid_y = ctx->params.height / 2;
+        struct Quad {
+            int x0;
+            int y0;
+            int x1;
+            int y1;
+        };
+        Quad quads[4] = {
+            {0, 0, mid_x, mid_y},
+            {mid_x, 0, ctx->params.width, mid_y},
+            {0, mid_y, mid_x, ctx->params.height},
+            {mid_x, mid_y, ctx->params.width, ctx->params.height}
+        };
+        const float scale = 1.0f / 1000000.0f;
+        for (int q = 0; q < 4; ++q) {
+            float v = clamp01(static_cast<float>(quad_ns[q]) * scale);
+            if (v <= 0.0f) {
+                continue;
+            }
+            for (int y = quads[q].y0; y < quads[q].y1; ++y) {
+                for (int x = quads[q].x0; x < quads[q].x1; ++x) {
+                    ctx->phero_gamma.at(x, y) += v;
                 }
-                agent.energy *= 0.6f;
-            }
-        } else {
-            if (agent.energy > 1.2f) {
-                ctx->dna_species[agent.species].add(ctx->params, agent.genome, agent.energy, ctx->evo, ctx->params.dna_capacity);
-                agent.energy *= 0.6f;
             }
         }
-    }
-
-    if (ctx->ocl_active) {
-        std::string error;
-        if (!ctx->ocl.upload_fields(ctx->phero_food, ctx->phero_danger, ctx->molecules, error)) {
-            ctx->ocl_active = false;
+    };
+    const int codon_max = 7;
+    const int lws_min = 0;
+    const int lws_max = 32;
+    const int toxic_stride_min = std::max(1, ctx->params.toxic_stride_min);
+    const int toxic_stride_max = std::max(toxic_stride_min, ctx->params.toxic_stride_max);
+    const int toxic_iters_min = std::max(0, ctx->params.toxic_iters_min);
+    const int toxic_iters_max = std::max(toxic_iters_min, ctx->params.toxic_iters_max);
+    const bool toxic_enabled = ctx->params.toxic_enable != 0;
+    auto randomize_codons = [&](Genome &g) {
+        for (int i = 0; i < 4; ++i) {
+            g.kernel_codons[i] = ctx->rng.uniform_int(0, codon_max);
         }
-    }
-
-    if (ctx->ocl_active) {
-        bool do_copyback = !ctx->ocl_no_copyback;
-        std::string error;
-        if (!ctx->ocl.step_diffuse(pheromone_params, molecule_params, do_copyback, ctx->phero_food, ctx->phero_danger, ctx->molecules, error)) {
-            ctx->ocl_active = false;
-            diffuse_and_evaporate(ctx->phero_food, pheromone_params);
-            diffuse_and_evaporate(ctx->phero_danger, pheromone_params);
-            diffuse_and_evaporate(ctx->molecules, molecule_params);
+        g.lws_x = ctx->rng.uniform_int(lws_min, lws_max);
+        g.lws_y = ctx->rng.uniform_int(lws_min, lws_max);
+        g.toxic_stride = ctx->rng.uniform_int(toxic_stride_min, toxic_stride_max);
+        g.toxic_iters = ctx->rng.uniform_int(toxic_iters_min, toxic_iters_max);
+        if (!toxic_enabled) {
+            g.toxic_iters = 0;
         }
-    } else {
-        diffuse_and_evaporate(ctx->phero_food, pheromone_params);
-        diffuse_and_evaporate(ctx->phero_danger, pheromone_params);
-        diffuse_and_evaporate(ctx->molecules, molecule_params);
-    }
-
-    ctx->mycel.update(ctx->params, ctx->phero_food, ctx->env.resources);
-    ctx->env.regenerate(ctx->params);
-    for (auto &pool : ctx->dna_species) {
-        pool.decay(ctx->evo);
-    }
-    ctx->dna_global.decay(ctx->evo);
-
+    };
+    auto mutate_codons = [&](Genome &g, float prob) {
+        if (prob <= 0.0f) return;
+        for (int i = 0; i < 4; ++i) {
+            if (ctx->rng.uniform(0.0f, 1.0f) < prob) {
+                g.kernel_codons[i] = ctx->rng.uniform_int(0, codon_max);
+            }
+        }
+        if (ctx->rng.uniform(0.0f, 1.0f) < prob) {
+            g.lws_x = ctx->rng.uniform_int(lws_min, lws_max);
+        }
+        if (ctx->rng.uniform(0.0f, 1.0f) < prob) {
+            g.lws_y = ctx->rng.uniform_int(lws_min, lws_max);
+        }
+        if (ctx->rng.uniform(0.0f, 1.0f) < prob) {
+            g.toxic_stride = ctx->rng.uniform_int(toxic_stride_min, toxic_stride_max);
+        }
+        if (ctx->rng.uniform(0.0f, 1.0f) < prob) {
+            g.toxic_iters = ctx->rng.uniform_int(toxic_iters_min, toxic_iters_max);
+        }
+        if (!toxic_enabled) {
+            g.toxic_iters = 0;
+        }
+    };
     auto random_genome = [&]() -> Genome {
         Genome g;
         g.sense_gain = ctx->rng.uniform(0.6f, 1.4f);
         g.pheromone_gain = ctx->rng.uniform(0.6f, 1.4f);
         g.exploration_bias = ctx->rng.uniform(0.2f, 0.8f);
+        randomize_semantics(ctx->rng, g);
+        randomize_codons(g);
+        clamp_genome(g);
         return g;
     };
     auto apply_role_mutation = [&](Genome &g, const SpeciesProfile &profile) {
@@ -425,6 +631,13 @@ void step_once(MicroSwarmContext *ctx) {
         if (delta > 0.0f) {
             g.exploration_bias += ctx->rng.uniform(-delta, delta);
         }
+        g.response_matrix[0] += gaussian(ctx->rng, sigma);
+        g.response_matrix[1] += gaussian(ctx->rng, sigma);
+        g.response_matrix[2] += gaussian(ctx->rng, sigma);
+        for (int i = 0; i < 4; ++i) {
+            g.emission_matrix[i] += gaussian(ctx->rng, sigma);
+        }
+        mutate_codons(g, std::min(0.5f, sigma * 2.0f));
         clamp_genome(g);
     };
     auto sample_genome = [&](int species) -> Genome {
@@ -440,12 +653,259 @@ void step_once(MicroSwarmContext *ctx) {
             }
         } else {
             g = random_genome();
+            apply_semantic_defaults(g, profile);
         }
         if (ctx->evo.enabled) {
             apply_role_mutation(g, profile);
         }
         return g;
     };
+    auto sample_output = [&](const GridField &field) -> float {
+        int x0 = std::max(0, ctx->params.logic_output_x - 1);
+        int x1 = std::min(ctx->params.width - 1, ctx->params.logic_output_x + 1);
+        int y0 = std::max(0, ctx->params.logic_output_y - 1);
+        int y1 = std::min(ctx->params.height - 1, ctx->params.logic_output_y + 1);
+        float sum = 0.0f;
+        int count = 0;
+        for (int y = y0; y <= y1; ++y) {
+            for (int x = x0; x <= x1; ++x) {
+                sum += field.at(x, y);
+                count++;
+            }
+        }
+        return (count > 0) ? (sum / static_cast<float>(count)) : 0.0f;
+    };
+
+    float quad_ns[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    if (ctx->ocl_active) {
+        ctx->ocl.last_quadrant_exhaustion_ns(quad_ns);
+    }
+    float stagnation = compute_stagnation();
+    inject_gamma(stagnation, quad_ns);
+
+    if (ctx->params.logic_mode != 0 && (ctx->step_index % ctx->params.logic_pulse_period == 0)) {
+        ctx->logic_active_case = ctx->logic_case;
+        int a = (ctx->logic_active_case >> 0) & 1;
+        int b = (ctx->logic_active_case >> 1) & 1;
+        if (a) {
+            ctx->phero_food.at(ctx->params.logic_input_ax, ctx->params.logic_input_ay) += ctx->params.logic_pulse_strength;
+        }
+        if (b) {
+            ctx->phero_food.at(ctx->params.logic_input_bx, ctx->params.logic_input_by) += ctx->params.logic_pulse_strength;
+        }
+        ctx->logic_case = (ctx->logic_case + 1) & 3;
+    }
+
+    for (auto &agent : ctx->agents) {
+        const SpeciesProfile &profile = ctx->profiles[agent.species];
+        int fitness_window = (ctx->evo.enabled && ctx->params.logic_mode == 0) ? ctx->evo.fitness_window : 0;
+        agent.step(ctx->rng,
+                   ctx->params,
+                   fitness_window,
+                   profile,
+                   ctx->phero_food,
+                   ctx->phero_danger,
+                   ctx->phero_gamma,
+                   ctx->molecules,
+                   ctx->env.resources,
+                   ctx->mycel.density);
+        if (ctx->evo.enabled && ctx->params.logic_mode != 0) {
+            float dist_a = distance_to_segment(static_cast<float>(ctx->params.logic_input_ax),
+                                               static_cast<float>(ctx->params.logic_input_ay),
+                                               static_cast<float>(ctx->params.logic_output_x),
+                                               static_cast<float>(ctx->params.logic_output_y),
+                                               agent.x, agent.y);
+            float dist_b = distance_to_segment(static_cast<float>(ctx->params.logic_input_bx),
+                                               static_cast<float>(ctx->params.logic_input_by),
+                                               static_cast<float>(ctx->params.logic_output_x),
+                                               static_cast<float>(ctx->params.logic_output_y),
+                                               agent.x, agent.y);
+            float dist = std::min(dist_a, dist_b);
+            float weight = 0.0f;
+            if (dist <= ctx->logic_path_radius) {
+                weight = 1.0f - (dist / ctx->logic_path_radius);
+            }
+            agent.fitness_value = ctx->logic_last_score * weight;
+        }
+        if (ctx->evo.enabled) {
+            if (agent.energy > ctx->evo_min_energy_to_store) {
+                float fitness = agent.fitness_value;
+                if (ctx->ocl_active) {
+                    float hw_penalty_ms = ctx->ocl.last_hardware_exhaustion_ns() / 1000000.0f;
+                    fitness = agent.fitness_value / (hw_penalty_ms + 0.0001f);
+                    if (!ctx->last_physics_valid) {
+                        fitness *= 0.01f;
+                    }
+                }
+                ctx->dna_species[agent.species].add(ctx->params, agent.genome, fitness, ctx->evo, ctx->params.dna_capacity);
+                float eps = 1e-6f;
+                if (ctx->params.dna_global_capacity > 0) {
+                    if (ctx->dna_global.entries.size() < static_cast<size_t>(ctx->params.dna_global_capacity) ||
+                        fitness > ctx->dna_global.entries.back().fitness + eps) {
+                        ctx->dna_global.add(ctx->params, agent.genome, fitness, ctx->evo, ctx->params.dna_global_capacity);
+                    }
+                }
+                agent.energy *= 0.6f;
+            }
+        } else {
+            if (agent.energy > 1.2f) {
+                ctx->dna_species[agent.species].add(ctx->params, agent.genome, agent.energy, ctx->evo, ctx->params.dna_capacity);
+                agent.energy *= 0.6f;
+            }
+        }
+    }
+
+    if (ctx->ocl_active && ctx->evo.enabled) {
+        struct QuadPick {
+            Genome genome;
+            float score = -1.0f;
+            bool has = false;
+            bool from_global = false;
+            int species = 0;
+        };
+        QuadPick picks[4];
+        auto is_toxic_extra = [](int idx) -> bool {
+            return idx >= 4;
+        };
+        int mid_x = ctx->params.width / 2;
+        int mid_y = ctx->params.height / 2;
+        for (const auto &agent : ctx->agents) {
+            int q = 0;
+            if (agent.x >= static_cast<float>(mid_x)) q += 1;
+            if (agent.y >= static_cast<float>(mid_y)) q += 2;
+            float score = (agent.fitness_value > 0.0f) ? agent.fitness_value : agent.energy;
+            if (!picks[q].has || score > picks[q].score) {
+                picks[q].genome = agent.genome;
+                picks[q].score = score;
+                picks[q].has = true;
+                picks[q].from_global = false;
+                picks[q].species = agent.species;
+            }
+        }
+        for (int q = 0; q < 4; ++q) {
+            if (!picks[q].has) {
+                if (!ctx->dna_global.entries.empty()) {
+                    picks[q].genome = ctx->dna_global.entries.front().genome;
+                    picks[q].from_global = true;
+                    picks[q].species = 0;
+                } else {
+                    picks[q].genome = random_genome();
+                    picks[q].from_global = false;
+                    picks[q].species = 0;
+                }
+                picks[q].has = true;
+            }
+        }
+
+        int lws[4][2] = {};
+        for (int q = 0; q < 4; ++q) {
+            lws[q][0] = picks[q].genome.lws_x;
+            lws[q][1] = picks[q].genome.lws_y;
+        }
+        ctx->ocl.set_quadrant_lws(lws);
+
+        if (ctx->step_index % 500 == 0) {
+            for (int q = 0; q < 4; ++q) {
+                int codons[4] = {
+                    picks[q].genome.kernel_codons[0],
+                    picks[q].genome.kernel_codons[1],
+                    picks[q].genome.kernel_codons[2],
+                    picks[q].genome.kernel_codons[3]
+                };
+                bool toxic_allowed = (ctx->params.toxic_enable != 0) && (ctx->params.toxic_max_fraction > 0.0f);
+                float gate = ctx->params.toxic_max_fraction;
+                if (ctx->params.toxic_max_fraction_by_quadrant[q] < gate) {
+                    gate = ctx->params.toxic_max_fraction_by_quadrant[q];
+                }
+                if (ctx->params.toxic_max_fraction_by_species[picks[q].species] < gate) {
+                    gate = ctx->params.toxic_max_fraction_by_species[picks[q].species];
+                }
+                int toxic_stride = std::min(ctx->params.toxic_stride_max, std::max(ctx->params.toxic_stride_min, picks[q].genome.toxic_stride));
+                int toxic_iters = std::min(ctx->params.toxic_iters_max, std::max(ctx->params.toxic_iters_min, picks[q].genome.toxic_iters));
+                if (!toxic_allowed) {
+                    toxic_iters = 0;
+                }
+                if (is_toxic_extra(codons[2])) {
+                    if (!toxic_allowed || ctx->rng.uniform(0.0f, 1.0f) > gate) {
+                        codons[2] = 0;
+                    }
+                }
+                std::string build_err;
+                if (!ctx->ocl.assemble_evolved_kernel_quadrant(q,
+                                                               codons,
+                                                               toxic_stride,
+                                                               toxic_iters,
+                                                               build_err)) {
+                    if (picks[q].from_global && !ctx->dna_global.entries.empty()) {
+                        ctx->dna_global.entries.front().fitness *= 0.1f;
+                        std::sort(ctx->dna_global.entries.begin(), ctx->dna_global.entries.end(), [](const DNAEntry &a, const DNAEntry &b) {
+                            return a.fitness > b.fitness;
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    bool cpu_diffused = false;
+    if (ctx->ocl_active) {
+        double pre_food_sum = field_sum(ctx->phero_food);
+        double pre_danger_sum = field_sum(ctx->phero_danger);
+        double pre_mol_sum = field_sum(ctx->molecules);
+        std::string error;
+        if (!ctx->ocl.upload_fields(ctx->phero_food, ctx->phero_danger, ctx->phero_gamma, ctx->molecules, error)) {
+            ctx->ocl_active = false;
+        }
+        if (ctx->ocl_active) {
+            bool do_copyback = !ctx->ocl_no_copyback;
+            if (!ctx->ocl.step_diffuse(pheromone_params, molecule_params, do_copyback, ctx->phero_food, ctx->phero_danger, ctx->phero_gamma, ctx->molecules, error)) {
+                ctx->ocl_active = false;
+                diffuse_and_evaporate(ctx->phero_food, pheromone_params);
+                diffuse_and_evaporate(ctx->phero_danger, pheromone_params);
+                diffuse_and_evaporate(ctx->phero_gamma, pheromone_params);
+                diffuse_and_evaporate(ctx->molecules, molecule_params);
+                cpu_diffused = true;
+            } else if (do_copyback) {
+                auto valid_sum = [](double pre, double post, float evap) -> bool {
+                    if (!std::isfinite(pre) || !std::isfinite(post)) return false;
+                    double expected = pre * (1.0 - static_cast<double>(evap));
+                    if (expected < 1e-6) {
+                        return post >= -1e-3;
+                    }
+                    double min_allowed = expected * 0.5;
+                    double max_allowed = pre * 1.1;
+                    return post >= min_allowed && post <= max_allowed;
+                };
+                double post_food_sum = field_sum(ctx->phero_food);
+                double post_danger_sum = field_sum(ctx->phero_danger);
+                double post_mol_sum = field_sum(ctx->molecules);
+                bool ok_food = valid_sum(pre_food_sum, post_food_sum, pheromone_params.evaporation);
+                bool ok_danger = valid_sum(pre_danger_sum, post_danger_sum, pheromone_params.evaporation);
+                bool ok_mol = valid_sum(pre_mol_sum, post_mol_sum, molecule_params.evaporation);
+                ctx->last_physics_valid = ok_food && ok_danger && ok_mol;
+            }
+        }
+    }
+    if (!ctx->ocl_active && !cpu_diffused) {
+        diffuse_and_evaporate(ctx->phero_food, pheromone_params);
+        diffuse_and_evaporate(ctx->phero_danger, pheromone_params);
+        diffuse_and_evaporate(ctx->phero_gamma, pheromone_params);
+        diffuse_and_evaporate(ctx->molecules, molecule_params);
+        ctx->last_physics_valid = true;
+    }
+
+    ctx->mycel.update(ctx->params, ctx->phero_food, ctx->env.resources);
+    if (ctx->params.logic_mode != 0) {
+        float measured = sample_output(ctx->mycel.density);
+        int target = logic_target_for_case(ctx->params.logic_mode, ctx->logic_active_case);
+        float score = 1.0f - std::abs(static_cast<float>(target) - clamp01(measured));
+        ctx->logic_last_score = clamp01(score);
+    }
+    ctx->env.regenerate(ctx->params);
+    for (auto &pool : ctx->dna_species) {
+        pool.decay(ctx->evo);
+    }
+    ctx->dna_global.decay(ctx->evo);
 
     for (auto &agent : ctx->agents) {
         if (agent.energy <= 0.05f) {
@@ -481,11 +941,16 @@ void fill_params(ms_params_t &out, const SimParams &params, const EvoParams &evo
     out.mycel_drive_threshold = params.mycel_drive_threshold;
     out.mycel_drive_p = params.mycel_drive_p;
     out.mycel_drive_r = params.mycel_drive_r;
+    out.mycel_inhibitor_weight = params.mycel_inhibitor_weight;
+    out.mycel_inhibitor_gain = params.mycel_inhibitor_gain;
+    out.mycel_inhibitor_decay = params.mycel_inhibitor_decay;
+    out.mycel_inhibitor_threshold = params.mycel_inhibitor_threshold;
     out.agent_move_cost = params.agent_move_cost;
     out.agent_harvest = params.agent_harvest;
     out.agent_deposit_scale = params.agent_deposit_scale;
     out.agent_sense_radius = params.agent_sense_radius;
     out.agent_random_turn = params.agent_random_turn;
+    out.info_metabolism_cost = params.info_metabolism_cost;
     out.dna_capacity = params.dna_capacity;
     out.dna_global_capacity = params.dna_global_capacity;
     out.dna_survival_bias = params.dna_survival_bias;
@@ -501,6 +966,25 @@ void fill_params(ms_params_t &out, const SimParams &params, const EvoParams &evo
     out.evo_fitness_window = evo.fitness_window;
     out.evo_age_decay = evo.age_decay;
     out.global_spawn_frac = global_spawn_frac;
+    out.toxic_enable = params.toxic_enable;
+    out.toxic_max_fraction = params.toxic_max_fraction;
+    out.toxic_stride_min = params.toxic_stride_min;
+    out.toxic_stride_max = params.toxic_stride_max;
+    out.toxic_iters_min = params.toxic_iters_min;
+    out.toxic_iters_max = params.toxic_iters_max;
+    for (int i = 0; i < 4; ++i) {
+        out.toxic_max_fraction_by_quadrant[i] = params.toxic_max_fraction_by_quadrant[i];
+        out.toxic_max_fraction_by_species[i] = params.toxic_max_fraction_by_species[i];
+    }
+    out.logic_mode = params.logic_mode;
+    out.logic_input_ax = params.logic_input_ax;
+    out.logic_input_ay = params.logic_input_ay;
+    out.logic_input_bx = params.logic_input_bx;
+    out.logic_input_by = params.logic_input_by;
+    out.logic_output_x = params.logic_output_x;
+    out.logic_output_y = params.logic_output_y;
+    out.logic_pulse_period = params.logic_pulse_period;
+    out.logic_pulse_strength = params.logic_pulse_strength;
 }
 
 void set_params_from_api(MicroSwarmContext *ctx, const ms_params_t &p) {
@@ -520,11 +1004,16 @@ void set_params_from_api(MicroSwarmContext *ctx, const ms_params_t &p) {
     ctx->params.mycel_drive_threshold = p.mycel_drive_threshold;
     ctx->params.mycel_drive_p = p.mycel_drive_p;
     ctx->params.mycel_drive_r = p.mycel_drive_r;
+    ctx->params.mycel_inhibitor_weight = p.mycel_inhibitor_weight;
+    ctx->params.mycel_inhibitor_gain = p.mycel_inhibitor_gain;
+    ctx->params.mycel_inhibitor_decay = p.mycel_inhibitor_decay;
+    ctx->params.mycel_inhibitor_threshold = p.mycel_inhibitor_threshold;
     ctx->params.agent_move_cost = p.agent_move_cost;
     ctx->params.agent_harvest = p.agent_harvest;
     ctx->params.agent_deposit_scale = p.agent_deposit_scale;
     ctx->params.agent_sense_radius = p.agent_sense_radius;
     ctx->params.agent_random_turn = p.agent_random_turn;
+    ctx->params.info_metabolism_cost = p.info_metabolism_cost;
     ctx->params.dna_capacity = p.dna_capacity;
     ctx->params.dna_global_capacity = p.dna_global_capacity;
     ctx->params.dna_survival_bias = p.dna_survival_bias;
@@ -541,6 +1030,56 @@ void set_params_from_api(MicroSwarmContext *ctx, const ms_params_t &p) {
     ctx->evo.age_decay = p.evo_age_decay;
     ctx->evo_min_energy_to_store = p.evo_min_energy_to_store;
     ctx->global_spawn_frac = p.global_spawn_frac;
+    ctx->params.toxic_enable = p.toxic_enable;
+    ctx->params.toxic_max_fraction = p.toxic_max_fraction;
+    ctx->params.toxic_stride_min = p.toxic_stride_min;
+    ctx->params.toxic_stride_max = p.toxic_stride_max;
+    ctx->params.toxic_iters_min = p.toxic_iters_min;
+    ctx->params.toxic_iters_max = p.toxic_iters_max;
+    for (int i = 0; i < 4; ++i) {
+        ctx->params.toxic_max_fraction_by_quadrant[i] = p.toxic_max_fraction_by_quadrant[i];
+        ctx->params.toxic_max_fraction_by_species[i] = p.toxic_max_fraction_by_species[i];
+    }
+    ctx->params.logic_mode = p.logic_mode;
+    ctx->params.logic_input_ax = p.logic_input_ax;
+    ctx->params.logic_input_ay = p.logic_input_ay;
+    ctx->params.logic_input_bx = p.logic_input_bx;
+    ctx->params.logic_input_by = p.logic_input_by;
+    ctx->params.logic_output_x = p.logic_output_x;
+    ctx->params.logic_output_y = p.logic_output_y;
+    ctx->params.logic_pulse_period = p.logic_pulse_period;
+    ctx->params.logic_pulse_strength = p.logic_pulse_strength;
+
+    if (ctx->params.toxic_stride_min <= 0) ctx->params.toxic_stride_min = 1;
+    if (ctx->params.toxic_stride_max < ctx->params.toxic_stride_min) ctx->params.toxic_stride_max = ctx->params.toxic_stride_min;
+    if (ctx->params.toxic_iters_min < 0) ctx->params.toxic_iters_min = 0;
+    if (ctx->params.toxic_iters_max < ctx->params.toxic_iters_min) ctx->params.toxic_iters_max = ctx->params.toxic_iters_min;
+    if (ctx->params.toxic_max_fraction < 0.0f) ctx->params.toxic_max_fraction = 0.0f;
+    if (ctx->params.toxic_max_fraction > 1.0f) ctx->params.toxic_max_fraction = 1.0f;
+    if (ctx->params.info_metabolism_cost < 0.0f) ctx->params.info_metabolism_cost = 0.0f;
+    for (int i = 0; i < 4; ++i) {
+        if (ctx->params.toxic_max_fraction_by_quadrant[i] < 0.0f) ctx->params.toxic_max_fraction_by_quadrant[i] = 0.0f;
+        if (ctx->params.toxic_max_fraction_by_quadrant[i] > 1.0f) ctx->params.toxic_max_fraction_by_quadrant[i] = 1.0f;
+        if (ctx->params.toxic_max_fraction_by_species[i] < 0.0f) ctx->params.toxic_max_fraction_by_species[i] = 0.0f;
+        if (ctx->params.toxic_max_fraction_by_species[i] > 1.0f) ctx->params.toxic_max_fraction_by_species[i] = 1.0f;
+    }
+    if (ctx->params.logic_mode < 0) ctx->params.logic_mode = 0;
+    if (ctx->params.logic_mode > 3) ctx->params.logic_mode = 3;
+    if (ctx->params.logic_pulse_period <= 0) ctx->params.logic_pulse_period = 20;
+    if (ctx->params.logic_pulse_strength < 0.0f) ctx->params.logic_pulse_strength = 0.0f;
+    if (ctx->params.width > 0 && ctx->params.height > 0) {
+        auto clamp_coord = [](int v, int max) -> int {
+            if (v < 0) return v;
+            if (v >= max) return max - 1;
+            return v;
+        };
+        ctx->params.logic_input_ax = clamp_coord(ctx->params.logic_input_ax, ctx->params.width);
+        ctx->params.logic_input_ay = clamp_coord(ctx->params.logic_input_ay, ctx->params.height);
+        ctx->params.logic_input_bx = clamp_coord(ctx->params.logic_input_bx, ctx->params.width);
+        ctx->params.logic_input_by = clamp_coord(ctx->params.logic_input_by, ctx->params.height);
+        ctx->params.logic_output_x = clamp_coord(ctx->params.logic_output_x, ctx->params.width);
+        ctx->params.logic_output_y = clamp_coord(ctx->params.logic_output_y, ctx->params.height);
+    }
 }
 
 } // namespace
@@ -727,7 +1266,7 @@ int ms_copy_field_in(ms_handle_t *h, ms_field_kind kind, const float *src, int s
     std::copy(src, src + count, field->data.begin());
     if (ctx->ocl_active) {
         std::string error;
-        ctx->ocl.upload_fields(ctx->phero_food, ctx->phero_danger, ctx->molecules, error);
+        ctx->ocl.upload_fields(ctx->phero_food, ctx->phero_danger, ctx->phero_gamma, ctx->molecules, error);
     }
     return count;
 }
@@ -740,7 +1279,7 @@ void ms_clear_field(ms_handle_t *h, ms_field_kind kind, float value) {
     field->fill(value);
     if (ctx->ocl_active) {
         std::string error;
-        ctx->ocl.upload_fields(ctx->phero_food, ctx->phero_danger, ctx->molecules, error);
+        ctx->ocl.upload_fields(ctx->phero_food, ctx->phero_danger, ctx->phero_gamma, ctx->molecules, error);
     }
 }
 
@@ -759,7 +1298,7 @@ int ms_load_field_csv(ms_handle_t *h, ms_field_kind kind, const char *path) {
     }
     field->data = data.values;
     if (ctx->ocl_active) {
-        ctx->ocl.upload_fields(ctx->phero_food, ctx->phero_danger, ctx->molecules, error);
+        ctx->ocl.upload_fields(ctx->phero_food, ctx->phero_danger, ctx->phero_gamma, ctx->molecules, error);
     }
     return 1;
 }
@@ -898,16 +1437,32 @@ int ms_export_dna_csv(ms_handle_t *h, const char *path) {
     auto *ctx = reinterpret_cast<MicroSwarmContext *>(h);
     std::ofstream out(path);
     if (!out.is_open()) return 0;
-    out << "pool,species,fitness,sense_gain,pheromone_gain,exploration_bias\n";
+    out << "pool,species,fitness,sense_gain,pheromone_gain,exploration_bias,"
+           "response0,response1,response2,emit0,emit1,emit2,emit3,"
+           "codon0,codon1,codon2,codon3,lws_x,lws_y,toxic_stride,toxic_iters\n";
     for (int s = 0; s < 4; ++s) {
         for (const auto &e : ctx->dna_species[s].entries) {
             out << "species," << s << "," << e.fitness << ","
-                << e.genome.sense_gain << "," << e.genome.pheromone_gain << "," << e.genome.exploration_bias << "\n";
+                << e.genome.sense_gain << "," << e.genome.pheromone_gain << "," << e.genome.exploration_bias << ","
+                << e.genome.response_matrix[0] << "," << e.genome.response_matrix[1] << "," << e.genome.response_matrix[2] << ","
+                << e.genome.emission_matrix[0] << "," << e.genome.emission_matrix[1] << ","
+                << e.genome.emission_matrix[2] << "," << e.genome.emission_matrix[3] << ","
+                << e.genome.kernel_codons[0] << "," << e.genome.kernel_codons[1] << ","
+                << e.genome.kernel_codons[2] << "," << e.genome.kernel_codons[3] << ","
+                << e.genome.lws_x << "," << e.genome.lws_y << ","
+                << e.genome.toxic_stride << "," << e.genome.toxic_iters << "\n";
         }
     }
     for (const auto &e : ctx->dna_global.entries) {
         out << "global,-1," << e.fitness << ","
-            << e.genome.sense_gain << "," << e.genome.pheromone_gain << "," << e.genome.exploration_bias << "\n";
+            << e.genome.sense_gain << "," << e.genome.pheromone_gain << "," << e.genome.exploration_bias << ","
+            << e.genome.response_matrix[0] << "," << e.genome.response_matrix[1] << "," << e.genome.response_matrix[2] << ","
+            << e.genome.emission_matrix[0] << "," << e.genome.emission_matrix[1] << ","
+            << e.genome.emission_matrix[2] << "," << e.genome.emission_matrix[3] << ","
+            << e.genome.kernel_codons[0] << "," << e.genome.kernel_codons[1] << ","
+            << e.genome.kernel_codons[2] << "," << e.genome.kernel_codons[3] << ","
+            << e.genome.lws_x << "," << e.genome.lws_y << ","
+            << e.genome.toxic_stride << "," << e.genome.toxic_iters << "\n";
     }
     return 1;
 }
@@ -922,19 +1477,56 @@ int ms_import_dna_csv(ms_handle_t *h, const char *path) {
     while (std::getline(in, line)) {
         if (line.empty()) continue;
         std::stringstream ss(line);
-        std::string pool, species_str, fitness_str, sg_str, pg_str, eb_str;
-        if (!std::getline(ss, pool, ',')) continue;
-        if (!std::getline(ss, species_str, ',')) continue;
-        if (!std::getline(ss, fitness_str, ',')) continue;
-        if (!std::getline(ss, sg_str, ',')) continue;
-        if (!std::getline(ss, pg_str, ',')) continue;
-        if (!std::getline(ss, eb_str, ',')) continue;
-        int species = std::stoi(species_str);
-        float fitness = std::stof(fitness_str);
+        std::vector<std::string> fields;
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            fields.push_back(token);
+        }
+        if (fields.size() < 14) continue;
+        std::string pool = fields[0];
+        int species = std::stoi(fields[1]);
+        float fitness = std::stof(fields[2]);
         Genome g;
-        g.sense_gain = std::stof(sg_str);
-        g.pheromone_gain = std::stof(pg_str);
-        g.exploration_bias = std::stof(eb_str);
+        g.sense_gain = std::stof(fields[3]);
+        g.pheromone_gain = std::stof(fields[4]);
+        g.exploration_bias = std::stof(fields[5]);
+        size_t idx = 6;
+        if (fields.size() >= 21) {
+            g.response_matrix[0] = std::stof(fields[idx++]);
+            g.response_matrix[1] = std::stof(fields[idx++]);
+            g.response_matrix[2] = std::stof(fields[idx++]);
+            g.emission_matrix[0] = std::stof(fields[idx++]);
+            g.emission_matrix[1] = std::stof(fields[idx++]);
+            g.emission_matrix[2] = std::stof(fields[idx++]);
+            g.emission_matrix[3] = std::stof(fields[idx++]);
+        } else {
+            g.response_matrix[0] = 1.0f;
+            g.response_matrix[1] = -1.0f;
+            g.response_matrix[2] = 0.0f;
+            g.emission_matrix[0] = 1.0f;
+            g.emission_matrix[1] = 0.0f;
+            g.emission_matrix[2] = 0.0f;
+            g.emission_matrix[3] = 1.0f;
+        }
+        if (fields.size() >= idx + 8) {
+            g.kernel_codons[0] = std::stoi(fields[idx++]);
+            g.kernel_codons[1] = std::stoi(fields[idx++]);
+            g.kernel_codons[2] = std::stoi(fields[idx++]);
+            g.kernel_codons[3] = std::stoi(fields[idx++]);
+            g.lws_x = std::stoi(fields[idx++]);
+            g.lws_y = std::stoi(fields[idx++]);
+            g.toxic_stride = std::stoi(fields[idx++]);
+            g.toxic_iters = std::stoi(fields[idx++]);
+        } else {
+            g.kernel_codons[0] = 0;
+            g.kernel_codons[1] = 0;
+            g.kernel_codons[2] = 0;
+            g.kernel_codons[3] = 0;
+            g.lws_x = 0;
+            g.lws_y = 0;
+            g.toxic_stride = 1;
+            g.toxic_iters = 0;
+        }
         clamp_genome(g);
         if (pool == "global") {
             ctx->dna_global.add(ctx->params, g, fitness, ctx->evo, ctx->params.dna_global_capacity);
@@ -1067,7 +1659,7 @@ void ms_ocl_enable(ms_handle_t *h, int enable) {
         ctx->ocl_active = false;
         return;
     }
-    if (!ctx->ocl.init_fields(ctx->phero_food, ctx->phero_danger, ctx->molecules, error)) {
+    if (!ctx->ocl.init_fields(ctx->phero_food, ctx->phero_danger, ctx->phero_gamma, ctx->molecules, error)) {
         ctx->ocl_active = false;
         return;
     }

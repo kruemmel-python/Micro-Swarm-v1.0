@@ -27,3 +27,11 @@ __kernel void diffuse_and_evaporate(__global const float *input,
     float value = sum * (1.0f - evaporation);
     output[idx] = fmax(value, 0.0f);
 }
+
+__kernel void contention_stamp(__global volatile int *slot,
+                               int value,
+                               int iterations) {
+    for (int i = 0; i < iterations; ++i) {
+        atomic_xchg(slot, value);
+    }
+}

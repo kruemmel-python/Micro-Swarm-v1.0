@@ -26,6 +26,7 @@ void Agent::step(Rng &rng,
                  const SpeciesProfile &profile,
                  GridField &phero_food,
                  GridField &phero_danger,
+                 const GridField &phero_gamma,
                  GridField &molecules,
                  GridField &resources,
                  const GridField &mycel) {
@@ -43,14 +44,16 @@ void Agent::step(Rng &rng,
     for (int i = 0; i < 3; ++i) {
         float nx = x + std::cos(angles[i]) * sensor;
         float ny = y + std::sin(angles[i]) * sensor;
-        float p_food = sample_field(phero_food, nx, ny) * genome.pheromone_gain * profile.food_attraction_mul;
-        float p_danger = sample_field(phero_danger, nx, ny) * genome.pheromone_gain * profile.danger_aversion_mul;
+        float alpha = sample_field(phero_food, nx, ny) * genome.pheromone_gain;
+        float beta = sample_field(phero_danger, nx, ny) * genome.pheromone_gain;
+        float gamma = sample_field(phero_gamma, nx, ny) * genome.pheromone_gain;
         float r = sample_field(resources, nx, ny) * profile.resource_weight_mul;
         float m = sample_field(molecules, nx, ny) * profile.molecule_weight_mul;
         float my = sample_field(mycel, nx, ny) * profile.mycel_attraction_mul;
-        float signal = p_food + p_danger + my;
-        float novelty = 1.0f - std::min(1.0f, std::max(0.0f, signal));
-        float w = p_food + r + 0.25f * m + my + profile.novelty_weight * novelty - p_danger;
+        float signal_impact = alpha * genome.response_matrix[0] + beta * genome.response_matrix[1] + gamma * genome.response_matrix[2];
+        float signal_strength = std::abs(signal_impact) + my;
+        float novelty = 1.0f - std::min(1.0f, std::max(0.0f, signal_strength));
+        float w = signal_impact + r + 0.25f * m + my + profile.novelty_weight * novelty;
         if (w < 0.001f) w = 0.001f;
         weights[i] = w;
     }
@@ -89,11 +92,22 @@ void Agent::step(Rng &rng,
         energy += harvested;
 
         float deposit = params.phero_food_deposit_scale * harvested;
-        phero_food.at(cx, cy) += deposit * profile.deposit_food_mul;
+        float alpha_drop = deposit * genome.emission_matrix[0];
+        float beta_drop = deposit * genome.emission_matrix[1];
+        phero_food.at(cx, cy) = std::max(0.0f, phero_food.at(cx, cy) + alpha_drop);
+        phero_danger.at(cx, cy) = std::max(0.0f, phero_danger.at(cx, cy) + beta_drop);
         molecules.at(cx, cy) += harvested * 0.5f;
     }
 
-    energy -= params.agent_move_cost;
+    float cognitive_load = std::abs(genome.response_matrix[0]) +
+                           std::abs(genome.response_matrix[1]) +
+                           std::abs(genome.response_matrix[2]) +
+                           std::abs(genome.emission_matrix[0]) +
+                           std::abs(genome.emission_matrix[1]) +
+                           std::abs(genome.emission_matrix[2]) +
+                           std::abs(genome.emission_matrix[3]);
+    float info_cost = cognitive_load * params.info_metabolism_cost;
+    energy -= params.agent_move_cost + info_cost;
     if (energy < 0.0f) {
         energy = 0.0f;
     }
@@ -120,7 +134,10 @@ void Agent::step(Rng &rng,
         int dx = static_cast<int>(x);
         int dy = static_cast<int>(y);
         if (dx >= 0 && dy >= 0 && dx < phero_danger.width && dy < phero_danger.height) {
-            phero_danger.at(dx, dy) += danger_deposit * profile.deposit_danger_mul;
+            float alpha_drop = danger_deposit * genome.emission_matrix[2];
+            float beta_drop = danger_deposit * genome.emission_matrix[3];
+            phero_food.at(dx, dy) = std::max(0.0f, phero_food.at(dx, dy) + alpha_drop);
+            phero_danger.at(dx, dy) = std::max(0.0f, phero_danger.at(dx, dy) + beta_drop);
         }
     }
 

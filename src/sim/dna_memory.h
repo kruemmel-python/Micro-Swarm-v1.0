@@ -9,6 +9,13 @@ struct Genome {
     float sense_gain = 1.0f;
     float pheromone_gain = 1.0f;
     float exploration_bias = 0.5f;
+    float response_matrix[3] = {1.0f, -1.0f, 0.0f};
+    float emission_matrix[4] = {1.0f, 0.0f, 0.0f, 1.0f};
+    int kernel_codons[4] = {0, 0, 0, 0};
+    int lws_x = 0;
+    int lws_y = 0;
+    int toxic_stride = 1;
+    int toxic_iters = 0;
 };
 
 struct DNAEntry {
@@ -33,3 +40,5 @@ struct DNAMemory {
     Genome sample(Rng &rng, const SimParams &params, const EvoParams &evo) const;
     void decay(const EvoParams &evo);
 };
+
+float calculate_genetic_stagnation(const std::vector<DNAEntry> &entries);

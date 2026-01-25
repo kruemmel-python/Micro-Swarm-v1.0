@@ -40,6 +40,7 @@ struct Agent {
               const SpeciesProfile &profile,
               GridField &phero_food,
               GridField &phero_danger,
+              const GridField &phero_gamma,
               GridField &molecules,
               GridField &resources,
               const GridField &mycel);

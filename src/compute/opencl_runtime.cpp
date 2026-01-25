@@ -4,6 +4,7 @@
 #include <sstream>
 #include <vector>
 #include <filesystem>
+#include <utility>
 
 #ifndef MICRO_SWARM_OPENCL
 #define MICRO_SWARM_OPENCL 0
@@ -15,6 +16,10 @@
 
 #if MICRO_SWARM_OPENCL
 #include <CL/cl.h>
+
+#ifndef CL_VERSION_2_0
+typedef cl_command_queue_properties cl_queue_properties;
+#endif
 
 #if MICRO_SWARM_OPENCL_DYNAMIC
 #if defined(_WIN32)
@@ -98,6 +103,81 @@ std::string load_kernel_source(const std::vector<std::string> &paths) {
     return "";
 }
 
+std::string build_evolved_kernel_source(const int codons[4], int toxic_stride, int toxic_iters) {
+    static const char *kCodonSum[] = {
+        "float sum = center * (1.0f - diffusion);",
+        "float sum = mad(center, 1.0f - diffusion, 0.0f);",
+        "float sum = center - (center * diffusion);",
+        "float sum = center * (1.0f - diffusion) + native_sin(center) * 0.0025f;"
+    };
+    static const char *kCodonNeighbors[] = {
+        "sum += input[idx - 1] * (diffusion * 0.25f);"
+        "sum += input[idx + 1] * (diffusion * 0.25f);"
+        "sum += input[idx - width] * (diffusion * 0.25f);"
+        "sum += input[idx + width] * (diffusion * 0.25f);",
+        "float d = diffusion * 0.25f;"
+        "sum += (input[idx - 1] + input[idx + 1] + input[idx - width] + input[idx + width]) * d;",
+        "float4 v = (float4)(input[idx - 1], input[idx + 1], input[idx - width], input[idx + width]);"
+        "sum += dot(v, (float4)(diffusion * 0.25f));",
+        "sum += (input[idx - 1] * 0.25f + input[idx + width] * 0.25f) * diffusion;"
+    };
+    static const char *kCodonExtra[] = {
+        "sum += 0.0f;",
+        "sum += native_sin(center) * 0.01f;",
+        "sum += native_exp(-fabs(center)) * 0.01f;",
+        "scratch[(lid + 17) & 63] = center; sum += scratch[(lid + 13) & 63] * 0.01f;",
+        "for (int i = 0; i < TOX_ITERS; ++i) { atomic_add(&anchor, 1); }",
+        "sum += scratch[(lid * TOX_STRIDE) & 63] * 0.01f;",
+        "for (int i = 0; i < TOX_ITERS; ++i) { atomic_add(&g_anchor[0], 1); }",
+        "float4 u = vload4(0, (const __global float *)(((const __global char *)input) + ((idx * 4 + 1) & 3))); sum += (u.x + u.y + u.z + u.w) * 0.0005f;"
+    };
+    static const char *kCodonOutput[] = {
+        "float value = sum * (1.0f - evaporation); output[idx] = fmax(value, 0.0f);",
+        "float value = fmax(sum - evaporation * sum, 0.0f); output[idx] = value;",
+        "float value = sum * (1.0f - evaporation); output[idx] = value < 0.0f ? 0.0f : value;",
+        "float t = native_sin(sum) + native_exp(-fabs(sum)); float value = (sum + t * 0.01f) * (1.0f - evaporation); output[idx] = fmax(value, 0.0f);"
+    };
+
+    auto pick = [](const char *const *pool, int count, int index) -> const char * {
+        if (count <= 0) return "";
+        int idx = index % count;
+        if (idx < 0) idx += count;
+        return pool[idx];
+    };
+
+    std::ostringstream ss;
+    ss << "__kernel void diffuse_and_evaporate(__global const float *input,\n"
+       << "                                    __global float *output,\n"
+       << "                                    int width,\n"
+       << "                                    int height,\n"
+       << "                                    float diffusion,\n"
+       << "                                    float evaporation) {\n"
+       << "    const int TOX_STRIDE = " << (toxic_stride > 0 ? toxic_stride : 1) << ";\n"
+       << "    const int TOX_ITERS = " << (toxic_iters > 0 ? toxic_iters : 0) << ";\n"
+       << "    int x = (int)get_global_id(0);\n"
+       << "    int y = (int)get_global_id(1);\n"
+       << "    if (x >= width || y >= height) return;\n"
+       << "    int idx = y * width + x;\n"
+       << "    float center = input[idx];\n"
+       << "    __local float scratch[64];\n"
+       << "    __local volatile int anchor;\n"
+       << "    __global volatile int *g_anchor = (__global volatile int *)output;\n"
+       << "    int lid = (int)get_local_id(0) + (int)get_local_id(1) * (int)get_local_size(0);\n"
+       << "    if (lid == 0) anchor = 0;\n"
+       << "    if (x == 0 || y == 0 || x == width - 1 || y == height - 1) {\n"
+       << "        float value = center * (1.0f - evaporation);\n"
+       << "        output[idx] = fmax(value, 0.0f);\n"
+       << "        return;\n"
+       << "    }\n"
+       << "    " << pick(kCodonSum, 4, codons[0]) << "\n"
+       << "    " << pick(kCodonNeighbors, 4, codons[1]) << "\n"
+       << "    " << pick(kCodonExtra, 8, codons[2]) << "\n"
+       << "    " << pick(kCodonOutput, 4, codons[3]) << "\n"
+       << "}\n";
+    return ss.str();
+}
+
+
 #if MICRO_SWARM_OPENCL_DYNAMIC
 struct OpenCLApi {
     bool loaded = false;
@@ -123,7 +203,10 @@ struct OpenCLApi {
     decltype(&clEnqueueWriteBuffer) clEnqueueWriteBuffer_fn = nullptr;
     decltype(&clEnqueueReadBuffer) clEnqueueReadBuffer_fn = nullptr;
     decltype(&clEnqueueNDRangeKernel) clEnqueueNDRangeKernel_fn = nullptr;
+    decltype(&clWaitForEvents) clWaitForEvents_fn = nullptr;
+    decltype(&clGetEventProfilingInfo) clGetEventProfilingInfo_fn = nullptr;
     decltype(&clFinish) clFinish_fn = nullptr;
+    decltype(&clReleaseEvent) clReleaseEvent_fn = nullptr;
     decltype(&clReleaseMemObject) clReleaseMemObject_fn = nullptr;
     decltype(&clReleaseKernel) clReleaseKernel_fn = nullptr;
     decltype(&clReleaseProgram) clReleaseProgram_fn = nullptr;
@@ -170,7 +253,10 @@ struct OpenCLApi {
         ok &= load_sym(clEnqueueWriteBuffer_fn, "clEnqueueWriteBuffer");
         ok &= load_sym(clEnqueueReadBuffer_fn, "clEnqueueReadBuffer");
         ok &= load_sym(clEnqueueNDRangeKernel_fn, "clEnqueueNDRangeKernel");
+        ok &= load_sym(clWaitForEvents_fn, "clWaitForEvents");
+        ok &= load_sym(clGetEventProfilingInfo_fn, "clGetEventProfilingInfo");
         ok &= load_sym(clFinish_fn, "clFinish");
+        ok &= load_sym(clReleaseEvent_fn, "clReleaseEvent");
         ok &= load_sym(clReleaseMemObject_fn, "clReleaseMemObject");
         ok &= load_sym(clReleaseKernel_fn, "clReleaseKernel");
         ok &= load_sym(clReleaseProgram_fn, "clReleaseProgram");
@@ -205,6 +291,57 @@ OpenCLApi g_api;
 #else
 #define OCL_CALL(fn) fn
 #endif
+
+bool codons_match(const int a[4], const int b[4]) {
+    for (int i = 0; i < 4; ++i) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool build_kernel_from_source(cl_context context,
+                              cl_device_id device,
+                              const std::string &source,
+                              cl_program &program,
+                              cl_kernel &kernel,
+                              std::string &error) {
+    const char *src_ptr = source.c_str();
+    size_t src_len = source.size();
+    cl_int err = CL_SUCCESS;
+    cl_program new_program = OCL_CALL(clCreateProgramWithSource)(context, 1, &src_ptr, &src_len, &err);
+    if (!new_program || err != CL_SUCCESS) {
+        error = std::string("clCreateProgramWithSource failed: ") + cl_err_to_string(err);
+        return false;
+    }
+    err = OCL_CALL(clBuildProgram)(new_program, 1, &device, nullptr, nullptr, nullptr);
+    if (err != CL_SUCCESS) {
+        size_t log_size = 0;
+        OCL_CALL(clGetProgramBuildInfo)(new_program, device, CL_PROGRAM_BUILD_LOG, 0, nullptr, &log_size);
+        std::string log(log_size, '\0');
+        OCL_CALL(clGetProgramBuildInfo)(new_program, device, CL_PROGRAM_BUILD_LOG, log_size, &log[0], nullptr);
+        error = std::string("clBuildProgram failed: ") + cl_err_to_string(err) + "\n" + log;
+        OCL_CALL(clReleaseProgram)(new_program);
+        return false;
+    }
+    cl_kernel new_kernel = OCL_CALL(clCreateKernel)(new_program, "diffuse_and_evaporate", &err);
+    if (!new_kernel || err != CL_SUCCESS) {
+        error = std::string("clCreateKernel failed: ") + cl_err_to_string(err);
+        OCL_CALL(clReleaseProgram)(new_program);
+        return false;
+    }
+
+    if (kernel) {
+        OCL_CALL(clReleaseKernel)(kernel);
+    }
+    if (program) {
+        OCL_CALL(clReleaseProgram)(program);
+    }
+    program = new_program;
+    kernel = new_kernel;
+    return true;
+}
 } // namespace
 
 struct OpenCLRuntime::Impl {
@@ -214,20 +351,49 @@ struct OpenCLRuntime::Impl {
     cl_command_queue queue = nullptr;
     cl_program program = nullptr;
     cl_kernel diffuse_kernel = nullptr;
+    cl_program evolved_programs[4] = {nullptr, nullptr, nullptr, nullptr};
+    cl_kernel evolved_kernels[4] = {nullptr, nullptr, nullptr, nullptr};
+    int evolved_codons[4][4] = {{-1, -1, -1, -1}, {-1, -1, -1, -1}, {-1, -1, -1, -1}, {-1, -1, -1, -1}};
+    int quadrant_lws[4][2] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+    bool use_quadrant_kernels = false;
 
     cl_mem phero_food_a = nullptr;
     cl_mem phero_food_b = nullptr;
     cl_mem phero_danger_a = nullptr;
     cl_mem phero_danger_b = nullptr;
+    cl_mem phero_gamma_a = nullptr;
+    cl_mem phero_gamma_b = nullptr;
     cl_mem molecules_a = nullptr;
     cl_mem molecules_b = nullptr;
     bool food_ping = true;
     bool danger_ping = true;
+    bool gamma_ping = true;
     bool molecules_ping = true;
     int width = 0;
     int height = 0;
+    bool profiling_enabled = false;
+    double last_hardware_exhaustion_ns = 0.0;
+    double last_quadrant_exhaustion_ns[4] = {0.0, 0.0, 0.0, 0.0};
 
     std::string device_info;
+    std::string kernel_source;
+
+    void release_evolved(int quadrant) {
+        if (quadrant < 0 || quadrant > 3) {
+            return;
+        }
+        if (evolved_kernels[quadrant]) {
+            OCL_CALL(clReleaseKernel)(evolved_kernels[quadrant]);
+            evolved_kernels[quadrant] = nullptr;
+        }
+        if (evolved_programs[quadrant]) {
+            OCL_CALL(clReleaseProgram)(evolved_programs[quadrant]);
+            evolved_programs[quadrant] = nullptr;
+        }
+        for (int i = 0; i < 4; ++i) {
+            evolved_codons[quadrant][i] = -1;
+        }
+    }
 
     void release_buffers() {
         if (phero_food_a) {
@@ -245,6 +411,14 @@ struct OpenCLRuntime::Impl {
         if (phero_danger_b) {
             OCL_CALL(clReleaseMemObject)(phero_danger_b);
             phero_danger_b = nullptr;
+        }
+        if (phero_gamma_a) {
+            OCL_CALL(clReleaseMemObject)(phero_gamma_a);
+            phero_gamma_a = nullptr;
+        }
+        if (phero_gamma_b) {
+            OCL_CALL(clReleaseMemObject)(phero_gamma_b);
+            phero_gamma_b = nullptr;
         }
         if (molecules_a) {
             OCL_CALL(clReleaseMemObject)(molecules_a);
@@ -265,6 +439,9 @@ struct OpenCLRuntime::Impl {
         if (program) {
             OCL_CALL(clReleaseProgram)(program);
             program = nullptr;
+        }
+        for (int q = 0; q < 4; ++q) {
+            release_evolved(q);
         }
         if (queue) {
             OCL_CALL(clReleaseCommandQueue)(queue);
@@ -350,15 +527,37 @@ bool OpenCLRuntime::init(int platform_index, int device_index, std::string &erro
 
 #if MICRO_SWARM_OPENCL_DYNAMIC
     if (OCL_CALL(clCreateCommandQueueWithProperties)) {
-        impl->queue = OCL_CALL(clCreateCommandQueueWithProperties)(impl->context, impl->device, nullptr, &err);
+        cl_queue_properties queue_props[] = {CL_QUEUE_PROPERTIES, static_cast<cl_queue_properties>(CL_QUEUE_PROFILING_ENABLE), 0};
+        impl->queue = OCL_CALL(clCreateCommandQueueWithProperties)(impl->context, impl->device, queue_props, &err);
+        if (impl->queue && err == CL_SUCCESS) {
+            impl->profiling_enabled = true;
+        } else {
+            impl->queue = OCL_CALL(clCreateCommandQueueWithProperties)(impl->context, impl->device, nullptr, &err);
+        }
     } else {
-        impl->queue = OCL_CALL(clCreateCommandQueue)(impl->context, impl->device, 0, &err);
+        impl->queue = OCL_CALL(clCreateCommandQueue)(impl->context, impl->device, CL_QUEUE_PROFILING_ENABLE, &err);
+        if (impl->queue && err == CL_SUCCESS) {
+            impl->profiling_enabled = true;
+        } else {
+            impl->queue = OCL_CALL(clCreateCommandQueue)(impl->context, impl->device, 0, &err);
+        }
     }
 #else
 #ifdef CL_VERSION_2_0
-    impl->queue = clCreateCommandQueueWithProperties(impl->context, impl->device, nullptr, &err);
+    cl_queue_properties queue_props[] = {CL_QUEUE_PROPERTIES, static_cast<cl_queue_properties>(CL_QUEUE_PROFILING_ENABLE), 0};
+    impl->queue = clCreateCommandQueueWithProperties(impl->context, impl->device, queue_props, &err);
+    if (impl->queue && err == CL_SUCCESS) {
+        impl->profiling_enabled = true;
+    } else {
+        impl->queue = clCreateCommandQueueWithProperties(impl->context, impl->device, nullptr, &err);
+    }
 #else
-    impl->queue = clCreateCommandQueue(impl->context, impl->device, 0, &err);
+    impl->queue = clCreateCommandQueue(impl->context, impl->device, CL_QUEUE_PROFILING_ENABLE, &err);
+    if (impl->queue && err == CL_SUCCESS) {
+        impl->profiling_enabled = true;
+    } else {
+        impl->queue = clCreateCommandQueue(impl->context, impl->device, 0, &err);
+    }
 #endif
 #endif
     if (!impl->queue || err != CL_SUCCESS) {
@@ -370,6 +569,16 @@ bool OpenCLRuntime::init(int platform_index, int device_index, std::string &erro
 }
 
 bool OpenCLRuntime::build_kernels(std::string &error) {
+    if (impl->diffuse_kernel) {
+        OCL_CALL(clReleaseKernel)(impl->diffuse_kernel);
+        impl->diffuse_kernel = nullptr;
+    }
+    if (impl->program) {
+        OCL_CALL(clReleaseProgram)(impl->program);
+        impl->program = nullptr;
+    }
+    std::string source = impl->kernel_source;
+    if (source.empty()) {
     std::vector<std::string> paths = {
         "src/compute/kernels/diffuse.cl",
         "../src/compute/kernels/diffuse.cl",
@@ -377,10 +586,11 @@ bool OpenCLRuntime::build_kernels(std::string &error) {
         "compute/kernels/diffuse.cl",
         "kernels/diffuse.cl"
     };
-    std::string source = load_kernel_source(paths);
-    if (source.empty()) {
-        error = "Kernel source not found (diffuse.cl)";
-        return false;
+        source = load_kernel_source(paths);
+        if (source.empty()) {
+            error = "Kernel source not found (diffuse.cl)";
+            return false;
+        }
     }
     const char *src_ptr = source.c_str();
     size_t src_len = source.size();
@@ -407,8 +617,64 @@ bool OpenCLRuntime::build_kernels(std::string &error) {
     return true;
 }
 
+void OpenCLRuntime::set_kernel_source(std::string source) {
+    if (!impl) {
+        return;
+    }
+    impl->kernel_source = std::move(source);
+}
+
+bool OpenCLRuntime::assemble_evolved_kernel(const int codons[4], int toxic_stride, int toxic_iters, std::string &error) {
+    if (!impl) {
+        error = "OpenCL runtime not initialized";
+        return false;
+    }
+    std::string source = build_evolved_kernel_source(codons, toxic_stride, toxic_iters);
+    set_kernel_source(std::move(source));
+    return build_kernels(error);
+}
+
+bool OpenCLRuntime::assemble_evolved_kernel_quadrant(int quadrant, const int codons[4], int toxic_stride, int toxic_iters, std::string &error) {
+    if (!impl) {
+        error = "OpenCL runtime not initialized";
+        return false;
+    }
+    if (quadrant < 0 || quadrant > 3) {
+        error = "Invalid quadrant index";
+        return false;
+    }
+    if (impl->evolved_kernels[quadrant] && codons_match(impl->evolved_codons[quadrant], codons)) {
+        impl->use_quadrant_kernels = true;
+        return true;
+    }
+    std::string source = build_evolved_kernel_source(codons, toxic_stride, toxic_iters);
+    cl_program program = impl->evolved_programs[quadrant];
+    cl_kernel kernel = impl->evolved_kernels[quadrant];
+    if (!build_kernel_from_source(impl->context, impl->device, source, program, kernel, error)) {
+        return false;
+    }
+    impl->evolved_programs[quadrant] = program;
+    impl->evolved_kernels[quadrant] = kernel;
+    for (int i = 0; i < 4; ++i) {
+        impl->evolved_codons[quadrant][i] = codons[i];
+    }
+    impl->use_quadrant_kernels = true;
+    return true;
+}
+
+void OpenCLRuntime::set_quadrant_lws(const int lws[4][2]) {
+    if (!impl || !lws) {
+        return;
+    }
+    for (int q = 0; q < 4; ++q) {
+        impl->quadrant_lws[q][0] = lws[q][0];
+        impl->quadrant_lws[q][1] = lws[q][1];
+    }
+}
+
 bool OpenCLRuntime::init_fields(const GridField &phero_food,
                                 const GridField &phero_danger,
+                                const GridField &phero_gamma,
                                 const GridField &molecules,
                                 std::string &error) {
     if (phero_food.width <= 0 || phero_food.height <= 0) {
@@ -416,7 +682,8 @@ bool OpenCLRuntime::init_fields(const GridField &phero_food,
         return false;
     }
     if (phero_food.width != molecules.width || phero_food.height != molecules.height ||
-        phero_food.width != phero_danger.width || phero_food.height != phero_danger.height) {
+        phero_food.width != phero_danger.width || phero_food.height != phero_danger.height ||
+        phero_food.width != phero_gamma.width || phero_food.height != phero_gamma.height) {
         error = "Field sizes must match";
         return false;
     }
@@ -445,6 +712,16 @@ bool OpenCLRuntime::init_fields(const GridField &phero_food,
         error = std::string("clCreateBuffer phero_danger_b failed: ") + cl_err_to_string(err);
         return false;
     }
+    impl->phero_gamma_a = OCL_CALL(clCreateBuffer)(impl->context, CL_MEM_READ_WRITE, bytes, nullptr, &err);
+    if (!impl->phero_gamma_a || err != CL_SUCCESS) {
+        error = std::string("clCreateBuffer phero_gamma_a failed: ") + cl_err_to_string(err);
+        return false;
+    }
+    impl->phero_gamma_b = OCL_CALL(clCreateBuffer)(impl->context, CL_MEM_READ_WRITE, bytes, nullptr, &err);
+    if (!impl->phero_gamma_b || err != CL_SUCCESS) {
+        error = std::string("clCreateBuffer phero_gamma_b failed: ") + cl_err_to_string(err);
+        return false;
+    }
     impl->molecules_a = OCL_CALL(clCreateBuffer)(impl->context, CL_MEM_READ_WRITE, bytes, nullptr, &err);
     if (!impl->molecules_a || err != CL_SUCCESS) {
         error = std::string("clCreateBuffer molecules_a failed: ") + cl_err_to_string(err);
@@ -457,6 +734,7 @@ bool OpenCLRuntime::init_fields(const GridField &phero_food,
     }
     impl->food_ping = true;
     impl->danger_ping = true;
+    impl->gamma_ping = true;
     impl->molecules_ping = true;
 
     err = OCL_CALL(clEnqueueWriteBuffer)(impl->queue, impl->phero_food_a, CL_TRUE, 0, bytes, phero_food.data.data(), 0, nullptr, nullptr);
@@ -469,6 +747,11 @@ bool OpenCLRuntime::init_fields(const GridField &phero_food,
         error = std::string("clEnqueueWriteBuffer phero_danger failed: ") + cl_err_to_string(err);
         return false;
     }
+    err = OCL_CALL(clEnqueueWriteBuffer)(impl->queue, impl->phero_gamma_a, CL_TRUE, 0, bytes, phero_gamma.data.data(), 0, nullptr, nullptr);
+    if (err != CL_SUCCESS) {
+        error = std::string("clEnqueueWriteBuffer phero_gamma failed: ") + cl_err_to_string(err);
+        return false;
+    }
     err = OCL_CALL(clEnqueueWriteBuffer)(impl->queue, impl->molecules_a, CL_TRUE, 0, bytes, molecules.data.data(), 0, nullptr, nullptr);
     if (err != CL_SUCCESS) {
         error = std::string("clEnqueueWriteBuffer molecules failed: ") + cl_err_to_string(err);
@@ -479,6 +762,7 @@ bool OpenCLRuntime::init_fields(const GridField &phero_food,
 
 bool OpenCLRuntime::upload_fields(const GridField &phero_food,
                                   const GridField &phero_danger,
+                                  const GridField &phero_gamma,
                                   const GridField &molecules,
                                   std::string &error) {
     if (phero_food.width != impl->width || phero_food.height != impl->height) {
@@ -488,6 +772,7 @@ bool OpenCLRuntime::upload_fields(const GridField &phero_food,
     size_t bytes = static_cast<size_t>(impl->width) * impl->height * sizeof(float);
     cl_mem food_current = impl->food_ping ? impl->phero_food_a : impl->phero_food_b;
     cl_mem danger_current = impl->danger_ping ? impl->phero_danger_a : impl->phero_danger_b;
+    cl_mem gamma_current = impl->gamma_ping ? impl->phero_gamma_a : impl->phero_gamma_b;
     cl_mem m_current = impl->molecules_ping ? impl->molecules_a : impl->molecules_b;
     cl_int err = OCL_CALL(clEnqueueWriteBuffer)(impl->queue, food_current, CL_TRUE, 0, bytes, phero_food.data.data(), 0, nullptr, nullptr);
     if (err != CL_SUCCESS) {
@@ -497,6 +782,11 @@ bool OpenCLRuntime::upload_fields(const GridField &phero_food,
     err = OCL_CALL(clEnqueueWriteBuffer)(impl->queue, danger_current, CL_TRUE, 0, bytes, phero_danger.data.data(), 0, nullptr, nullptr);
     if (err != CL_SUCCESS) {
         error = std::string("clEnqueueWriteBuffer phero_danger failed: ") + cl_err_to_string(err);
+        return false;
+    }
+    err = OCL_CALL(clEnqueueWriteBuffer)(impl->queue, gamma_current, CL_TRUE, 0, bytes, phero_gamma.data.data(), 0, nullptr, nullptr);
+    if (err != CL_SUCCESS) {
+        error = std::string("clEnqueueWriteBuffer phero_gamma failed: ") + cl_err_to_string(err);
         return false;
     }
     err = OCL_CALL(clEnqueueWriteBuffer)(impl->queue, m_current, CL_TRUE, 0, bytes, molecules.data.data(), 0, nullptr, nullptr);
@@ -512,61 +802,168 @@ bool OpenCLRuntime::step_diffuse(const FieldParams &pheromone_params,
                                  bool do_copyback,
                                  GridField &phero_food,
                                  GridField &phero_danger,
+                                 GridField &phero_gamma,
                                  GridField &molecules,
                                  std::string &error) {
     if (!impl->diffuse_kernel || !impl->queue) {
         error = "OpenCL runtime not initialized";
         return false;
     }
-    size_t global[2] = {static_cast<size_t>(impl->width), static_cast<size_t>(impl->height)};
-    auto run_kernel = [&](cl_mem in_buf, cl_mem out_buf, const FieldParams &params) -> bool {
+    auto run_kernel = [&](cl_kernel kernel,
+                          cl_mem in_buf,
+                          cl_mem out_buf,
+                          const FieldParams &params,
+                          const size_t *offset,
+                          const size_t *global,
+                          const size_t *local,
+                          double &elapsed_ns) -> bool {
+        elapsed_ns = 0.0;
         cl_int err = CL_SUCCESS;
-        err |= OCL_CALL(clSetKernelArg)(impl->diffuse_kernel, 0, sizeof(cl_mem), &in_buf);
-        err |= OCL_CALL(clSetKernelArg)(impl->diffuse_kernel, 1, sizeof(cl_mem), &out_buf);
-        err |= OCL_CALL(clSetKernelArg)(impl->diffuse_kernel, 2, sizeof(int), &impl->width);
-        err |= OCL_CALL(clSetKernelArg)(impl->diffuse_kernel, 3, sizeof(int), &impl->height);
-        err |= OCL_CALL(clSetKernelArg)(impl->diffuse_kernel, 4, sizeof(float), &params.diffusion);
-        err |= OCL_CALL(clSetKernelArg)(impl->diffuse_kernel, 5, sizeof(float), &params.evaporation);
+        err |= OCL_CALL(clSetKernelArg)(kernel, 0, sizeof(cl_mem), &in_buf);
+        err |= OCL_CALL(clSetKernelArg)(kernel, 1, sizeof(cl_mem), &out_buf);
+        err |= OCL_CALL(clSetKernelArg)(kernel, 2, sizeof(int), &impl->width);
+        err |= OCL_CALL(clSetKernelArg)(kernel, 3, sizeof(int), &impl->height);
+        err |= OCL_CALL(clSetKernelArg)(kernel, 4, sizeof(float), &params.diffusion);
+        err |= OCL_CALL(clSetKernelArg)(kernel, 5, sizeof(float), &params.evaporation);
         if (err != CL_SUCCESS) {
             error = std::string("clSetKernelArg failed: ") + cl_err_to_string(err);
             return false;
         }
-        err = OCL_CALL(clEnqueueNDRangeKernel)(impl->queue, impl->diffuse_kernel, 2, nullptr, global, nullptr, 0, nullptr, nullptr);
+        cl_event event = nullptr;
+        err = OCL_CALL(clEnqueueNDRangeKernel)(
+            impl->queue,
+            kernel,
+            2,
+            offset,
+            global,
+            local,
+            0,
+            nullptr,
+            impl->profiling_enabled ? &event : nullptr);
         if (err != CL_SUCCESS) {
             error = std::string("clEnqueueNDRangeKernel failed: ") + cl_err_to_string(err);
             return false;
+        }
+        if (impl->profiling_enabled && event) {
+            err = OCL_CALL(clWaitForEvents)(1, &event);
+            if (err == CL_SUCCESS) {
+                cl_ulong start = 0;
+                cl_ulong end = 0;
+                cl_int perr = OCL_CALL(clGetEventProfilingInfo)(event, CL_PROFILING_COMMAND_START, sizeof(start), &start, nullptr);
+                if (perr == CL_SUCCESS) {
+                    perr = OCL_CALL(clGetEventProfilingInfo)(event, CL_PROFILING_COMMAND_END, sizeof(end), &end, nullptr);
+                }
+                if (perr == CL_SUCCESS && end >= start) {
+                    elapsed_ns = static_cast<double>(end - start);
+                }
+            }
+            OCL_CALL(clReleaseEvent)(event);
+        }
+        return true;
+    };
+
+    double total_ns = 0.0;
+    double quad_ns[4] = {0.0, 0.0, 0.0, 0.0};
+    double elapsed_ns = 0.0;
+
+    auto enqueue_field = [&](cl_mem in_buf, cl_mem out_buf, const FieldParams &params) -> bool {
+        if (!impl->use_quadrant_kernels) {
+            size_t global[2] = {static_cast<size_t>(impl->width), static_cast<size_t>(impl->height)};
+            if (!run_kernel(impl->diffuse_kernel, in_buf, out_buf, params, nullptr, global, nullptr, elapsed_ns)) {
+                return false;
+            }
+            total_ns += elapsed_ns;
+            return true;
+        }
+
+        int mid_x = impl->width / 2;
+        int mid_y = impl->height / 2;
+        struct Quad {
+            size_t x;
+            size_t y;
+            size_t w;
+            size_t h;
+        };
+        Quad quads[4] = {
+            {0u, 0u, static_cast<size_t>(mid_x), static_cast<size_t>(mid_y)},
+            {static_cast<size_t>(mid_x), 0u, static_cast<size_t>(impl->width - mid_x), static_cast<size_t>(mid_y)},
+            {0u, static_cast<size_t>(mid_y), static_cast<size_t>(mid_x), static_cast<size_t>(impl->height - mid_y)},
+            {static_cast<size_t>(mid_x), static_cast<size_t>(mid_y), static_cast<size_t>(impl->width - mid_x), static_cast<size_t>(impl->height - mid_y)}
+        };
+
+        for (int q = 0; q < 4; ++q) {
+            if (quads[q].w == 0 || quads[q].h == 0) {
+                continue;
+            }
+            cl_kernel kernel = impl->evolved_kernels[q] ? impl->evolved_kernels[q] : impl->diffuse_kernel;
+            size_t offset[2] = {quads[q].x, quads[q].y};
+            size_t global[2] = {quads[q].w, quads[q].h};
+            size_t local_storage[2] = {0u, 0u};
+            const size_t *local = nullptr;
+            int lx = impl->quadrant_lws[q][0];
+            int ly = impl->quadrant_lws[q][1];
+            if (lx > 0 && ly > 0) {
+                if (global[0] % static_cast<size_t>(lx) == 0 &&
+                    global[1] % static_cast<size_t>(ly) == 0) {
+                    local_storage[0] = static_cast<size_t>(lx);
+                    local_storage[1] = static_cast<size_t>(ly);
+                    local = local_storage;
+                }
+            }
+            if (!run_kernel(kernel, in_buf, out_buf, params, offset, global, local, elapsed_ns)) {
+                return false;
+            }
+            total_ns += elapsed_ns;
+            quad_ns[q] += elapsed_ns;
         }
         return true;
     };
 
     cl_mem food_in = impl->food_ping ? impl->phero_food_a : impl->phero_food_b;
     cl_mem food_out = impl->food_ping ? impl->phero_food_b : impl->phero_food_a;
-    if (!run_kernel(food_in, food_out, pheromone_params)) {
+    if (!enqueue_field(food_in, food_out, pheromone_params)) {
         return false;
     }
     impl->food_ping = !impl->food_ping;
 
     cl_mem danger_in = impl->danger_ping ? impl->phero_danger_a : impl->phero_danger_b;
     cl_mem danger_out = impl->danger_ping ? impl->phero_danger_b : impl->phero_danger_a;
-    if (!run_kernel(danger_in, danger_out, pheromone_params)) {
+    if (!enqueue_field(danger_in, danger_out, pheromone_params)) {
         return false;
     }
     impl->danger_ping = !impl->danger_ping;
 
+    cl_mem gamma_in = impl->gamma_ping ? impl->phero_gamma_a : impl->phero_gamma_b;
+    cl_mem gamma_out = impl->gamma_ping ? impl->phero_gamma_b : impl->phero_gamma_a;
+    if (!enqueue_field(gamma_in, gamma_out, pheromone_params)) {
+        return false;
+    }
+    impl->gamma_ping = !impl->gamma_ping;
+
     cl_mem m_in = impl->molecules_ping ? impl->molecules_a : impl->molecules_b;
     cl_mem m_out = impl->molecules_ping ? impl->molecules_b : impl->molecules_a;
-    if (!run_kernel(m_in, m_out, molecule_params)) {
+    if (!enqueue_field(m_in, m_out, molecule_params)) {
         return false;
     }
     impl->molecules_ping = !impl->molecules_ping;
+    impl->last_hardware_exhaustion_ns = total_ns;
+    for (int q = 0; q < 4; ++q) {
+        impl->last_quadrant_exhaustion_ns[q] = quad_ns[q];
+    }
+    if (!impl->use_quadrant_kernels) {
+        double per = total_ns / 4.0;
+        for (int q = 0; q < 4; ++q) {
+            impl->last_quadrant_exhaustion_ns[q] = per;
+        }
+    }
 
     if (do_copyback) {
-        return copyback(phero_food, phero_danger, molecules, error);
+        return copyback(phero_food, phero_danger, phero_gamma, molecules, error);
     }
     return true;
 }
 
-bool OpenCLRuntime::copyback(GridField &phero_food, GridField &phero_danger, GridField &molecules, std::string &error) {
+bool OpenCLRuntime::copyback(GridField &phero_food, GridField &phero_danger, GridField &phero_gamma, GridField &molecules, std::string &error) {
     if (phero_food.width != impl->width || phero_food.height != impl->height) {
         error = "Host field size mismatch";
         return false;
@@ -574,6 +971,7 @@ bool OpenCLRuntime::copyback(GridField &phero_food, GridField &phero_danger, Gri
     size_t bytes = static_cast<size_t>(impl->width) * impl->height * sizeof(float);
     cl_mem food_current = impl->food_ping ? impl->phero_food_a : impl->phero_food_b;
     cl_mem danger_current = impl->danger_ping ? impl->phero_danger_a : impl->phero_danger_b;
+    cl_mem gamma_current = impl->gamma_ping ? impl->phero_gamma_a : impl->phero_gamma_b;
     cl_mem m_current = impl->molecules_ping ? impl->molecules_a : impl->molecules_b;
     cl_int err = OCL_CALL(clEnqueueReadBuffer)(impl->queue, food_current, CL_TRUE, 0, bytes, phero_food.data.data(), 0, nullptr, nullptr);
     if (err != CL_SUCCESS) {
@@ -583,6 +981,11 @@ bool OpenCLRuntime::copyback(GridField &phero_food, GridField &phero_danger, Gri
     err = OCL_CALL(clEnqueueReadBuffer)(impl->queue, danger_current, CL_TRUE, 0, bytes, phero_danger.data.data(), 0, nullptr, nullptr);
     if (err != CL_SUCCESS) {
         error = std::string("clEnqueueReadBuffer phero_danger failed: ") + cl_err_to_string(err);
+        return false;
+    }
+    err = OCL_CALL(clEnqueueReadBuffer)(impl->queue, gamma_current, CL_TRUE, 0, bytes, phero_gamma.data.data(), 0, nullptr, nullptr);
+    if (err != CL_SUCCESS) {
+        error = std::string("clEnqueueReadBuffer phero_gamma failed: ") + cl_err_to_string(err);
         return false;
     }
     err = OCL_CALL(clEnqueueReadBuffer)(impl->queue, m_current, CL_TRUE, 0, bytes, molecules.data.data(), 0, nullptr, nullptr);
@@ -595,6 +998,28 @@ bool OpenCLRuntime::copyback(GridField &phero_food, GridField &phero_danger, Gri
 
 bool OpenCLRuntime::is_available() const {
     return impl && impl->context && impl->queue && impl->diffuse_kernel;
+}
+
+float OpenCLRuntime::last_hardware_exhaustion_ns() const {
+    if (!impl) {
+        return 0.0f;
+    }
+    return static_cast<float>(impl->last_hardware_exhaustion_ns);
+}
+
+void OpenCLRuntime::last_quadrant_exhaustion_ns(float out[4]) const {
+    if (!out) {
+        return;
+    }
+    if (!impl) {
+        for (int i = 0; i < 4; ++i) {
+            out[i] = 0.0f;
+        }
+        return;
+    }
+    for (int i = 0; i < 4; ++i) {
+        out[i] = static_cast<float>(impl->last_quadrant_exhaustion_ns[i]);
+    }
 }
 
 std::string OpenCLRuntime::device_info() const {
@@ -656,11 +1081,20 @@ OpenCLRuntime::OpenCLRuntime() : impl(nullptr) {}
 OpenCLRuntime::~OpenCLRuntime() {}
 bool OpenCLRuntime::init(int, int, std::string &error) { error = "OpenCL disabled at build time"; return false; }
 bool OpenCLRuntime::build_kernels(std::string &error) { error = "OpenCL disabled at build time"; return false; }
-bool OpenCLRuntime::init_fields(const GridField &, const GridField &, const GridField &, std::string &error) { error = "OpenCL disabled at build time"; return false; }
-bool OpenCLRuntime::upload_fields(const GridField &, const GridField &, const GridField &, std::string &error) { error = "OpenCL disabled at build time"; return false; }
-bool OpenCLRuntime::step_diffuse(const FieldParams &, const FieldParams &, bool, GridField &, GridField &, GridField &, std::string &error) { error = "OpenCL disabled at build time"; return false; }
-bool OpenCLRuntime::copyback(GridField &, GridField &, GridField &, std::string &error) { error = "OpenCL disabled at build time"; return false; }
+void OpenCLRuntime::set_kernel_source(std::string) {}
+bool OpenCLRuntime::assemble_evolved_kernel(const int[4], int, int, std::string &error) { error = "OpenCL disabled at build time"; return false; }
+bool OpenCLRuntime::assemble_evolved_kernel_quadrant(int, const int[4], int, int, std::string &error) { error = "OpenCL disabled at build time"; return false; }
+void OpenCLRuntime::set_quadrant_lws(const int[4][2]) {}
+bool OpenCLRuntime::init_fields(const GridField &, const GridField &, const GridField &, const GridField &, std::string &error) { error = "OpenCL disabled at build time"; return false; }
+bool OpenCLRuntime::upload_fields(const GridField &, const GridField &, const GridField &, const GridField &, std::string &error) { error = "OpenCL disabled at build time"; return false; }
+bool OpenCLRuntime::step_diffuse(const FieldParams &, const FieldParams &, bool, GridField &, GridField &, GridField &, GridField &, std::string &error) { error = "OpenCL disabled at build time"; return false; }
+bool OpenCLRuntime::copyback(GridField &, GridField &, GridField &, GridField &, std::string &error) { error = "OpenCL disabled at build time"; return false; }
 bool OpenCLRuntime::is_available() const { return false; }
+float OpenCLRuntime::last_hardware_exhaustion_ns() const { return 0.0f; }
+void OpenCLRuntime::last_quadrant_exhaustion_ns(float out[4]) const {
+    if (!out) return;
+    for (int i = 0; i < 4; ++i) out[i] = 0.0f;
+}
 std::string OpenCLRuntime::device_info() const { return ""; }
 bool OpenCLRuntime::print_devices(std::string &, std::string &error) { error = "OpenCL disabled at build time"; return false; }
 #endif

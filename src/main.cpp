@@ -46,6 +46,10 @@ struct CliOptions {
     bool report_global_norm = false;
     int report_hist_bins = 64;
     bool report_include_sparklines = true;
+    int log_verbosity = 1;
+    bool logic_inputs_set = false;
+    bool logic_output_set = false;
+    std::string dna_export_path;
 
     bool ocl_enable = false;
     int ocl_device = 0;
@@ -197,6 +201,7 @@ void print_help() {
               << "  --agents N       Anzahl Agenten\n"
               << "  --steps N        Simulationsschritte\n"
               << "  --seed N         RNG-Seed\n"
+              << "  --info-cost F    Kosten pro Informations-Last\n"
               << "  --resources CSV  Startwerte Ressourcenfeld\n"
               << "  --pheromone CSV  Startwerte Pheromonfeld\n"
               << "  --molecules CSV  Startwerte Molekuelfeld\n"
@@ -221,6 +226,7 @@ void print_help() {
               << "  --report-global-norm   Globale Normalisierung fuer Previews\n"
               << "  --report-hist-bins N   Histogramm-Bins fuer Entropie\n"
               << "  --report-no-sparklines Sparklines deaktivieren\n"
+              << "  --dna-export PATH   DNA-Pool als CSV exportieren\n"
               << "  --ocl-enable           OpenCL Diffusion aktivieren\n"
               << "  --ocl-device N         OpenCL Device Index\n"
               << "  --ocl-platform N       OpenCL Platform Index\n"
@@ -244,6 +250,21 @@ void print_help() {
               << "  --evo-exploration-delta F        Exploration-Mutation\n"
               << "  --evo-fitness-window N           Fitness-Fenster\n"
               << "  --evo-age-decay F                Age-Decay pro Tick\n"
+              << "  --toxic-enable                   Toxische Codons aktivieren\n"
+              << "  --toxic-disable                  Toxische Codons deaktivieren\n"
+              << "  --toxic-max-frac F               Max-Anteil toxischer Codons pro Quadrant (0..1)\n"
+              << "  --toxic-stride-min N             Min Stride fuer toxische Codons\n"
+              << "  --toxic-stride-max N             Max Stride fuer toxische Codons\n"
+              << "  --toxic-iters-min N              Min Iterationen fuer toxische Codons\n"
+              << "  --toxic-iters-max N              Max Iterationen fuer toxische Codons\n"
+              << "  --toxic-max-frac-quadrant Q F    Max-Anteil toxischer Codons pro Quadrant (Q=0..3)\n"
+              << "  --toxic-max-frac-species S F     Max-Anteil toxischer Codons pro Spezies (S=0..3)\n"
+              << "  --logic-mode NAME               Logic-Target (NONE|XOR|AND|OR)\n"
+              << "  --logic-inputs x1 y1 x2 y2       Input-Koordinaten fuer A/B\n"
+              << "  --logic-output x y               Output-Koordinate\n"
+              << "  --logic-pulse-period N           Puls-Periode in Steps\n"
+              << "  --logic-pulse-strength F         Pheromon-Pulsstaerke\n"
+              << "  --log-verbosity N                Logging-Level (0=leise,1=normal,2=detail)\n"
               << "  --help           Hilfe anzeigen\n";
 }
 
@@ -280,6 +301,141 @@ bool parse_string(const char *value, std::string &out) {
     }
     out = value;
     return !out.empty();
+}
+
+int parse_logic_mode(const std::string &value, bool &ok) {
+    std::string v = value;
+    for (char &c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (v == "none") { ok = true; return 0; }
+    if (v == "xor") { ok = true; return 1; }
+    if (v == "and") { ok = true; return 2; }
+    if (v == "or") { ok = true; return 3; }
+    ok = false;
+    return 0;
+}
+
+float clamp01(float v) {
+    if (v < 0.0f) return 0.0f;
+    if (v > 1.0f) return 1.0f;
+    return v;
+}
+
+float clamp_range(float v, float lo, float hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+float gaussian(Rng &rng, float sigma) {
+    if (sigma <= 0.0f) return 0.0f;
+    float u1 = std::max(1e-6f, rng.uniform(0.0f, 1.0f));
+    float u2 = rng.uniform(0.0f, 1.0f);
+    float mag = std::sqrt(-2.0f * std::log(u1));
+    float z0 = mag * std::cos(6.283185307f * u2);
+    return z0 * sigma;
+}
+
+void randomize_semantics(Rng &rng, Genome &g) {
+    g.response_matrix[0] = 1.0f + rng.uniform(-0.3f, 0.3f);
+    g.response_matrix[1] = -1.0f + rng.uniform(-0.3f, 0.3f);
+    g.response_matrix[2] = 0.0f + rng.uniform(-0.3f, 0.3f);
+    g.emission_matrix[0] = 1.0f + rng.uniform(-0.3f, 0.3f);
+    g.emission_matrix[1] = 0.0f + rng.uniform(-0.3f, 0.3f);
+    g.emission_matrix[2] = 0.0f + rng.uniform(-0.3f, 0.3f);
+    g.emission_matrix[3] = 1.0f + rng.uniform(-0.3f, 0.3f);
+}
+
+void clamp_semantics(Genome &g) {
+    g.response_matrix[0] = clamp_range(g.response_matrix[0], -2.0f, 2.0f);
+    g.response_matrix[1] = clamp_range(g.response_matrix[1], -2.0f, 2.0f);
+    g.response_matrix[2] = clamp_range(g.response_matrix[2], -2.0f, 2.0f);
+    for (int i = 0; i < 4; ++i) {
+        g.emission_matrix[i] = clamp_range(g.emission_matrix[i], -2.0f, 2.0f);
+    }
+}
+
+void apply_semantic_defaults(Genome &g, const SpeciesProfile &profile) {
+    g.response_matrix[0] = clamp_range(profile.food_attraction_mul, -1.5f, 1.5f);
+    g.response_matrix[1] = clamp_range(-profile.danger_aversion_mul, -1.5f, 1.5f);
+    g.response_matrix[2] = 0.0f;
+    g.emission_matrix[0] = clamp_range(profile.deposit_food_mul, -1.5f, 1.5f);
+    g.emission_matrix[1] = 0.0f;
+    g.emission_matrix[2] = 0.0f;
+    g.emission_matrix[3] = clamp_range(profile.deposit_danger_mul, -1.5f, 1.5f);
+    clamp_semantics(g);
+}
+
+int logic_target_for_case(int mode, int case_idx) {
+    int a = (case_idx >> 0) & 1;
+    int b = (case_idx >> 1) & 1;
+    switch (mode) {
+        case 1: return a ^ b;
+        case 2: return a & b;
+        case 3: return (a | b);
+        default: return 0;
+    }
+}
+
+float distance_to_segment(float ax, float ay, float bx, float by, float px, float py) {
+    float vx = bx - ax;
+    float vy = by - ay;
+    float wx = px - ax;
+    float wy = py - ay;
+    float c1 = vx * wx + vy * wy;
+    if (c1 <= 0.0f) {
+        float dx = px - ax;
+        float dy = py - ay;
+        return std::sqrt(dx * dx + dy * dy);
+    }
+    float c2 = vx * vx + vy * vy;
+    if (c2 <= c1) {
+        float dx = px - bx;
+        float dy = py - by;
+        return std::sqrt(dx * dx + dy * dy);
+    }
+    float t = c1 / c2;
+    float projx = ax + t * vx;
+    float projy = ay + t * vy;
+    float dx = px - projx;
+    float dy = py - projy;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+bool export_dna_csv(const std::string &path,
+                    const std::array<DNAMemory, 4> &dna_species,
+                    const DNAMemory &dna_global) {
+    std::ofstream out(path);
+    if (!out.is_open()) {
+        return false;
+    }
+    out << "pool,species,fitness,sense_gain,pheromone_gain,exploration_bias,"
+           "response0,response1,response2,emit0,emit1,emit2,emit3,"
+           "codon0,codon1,codon2,codon3,lws_x,lws_y,toxic_stride,toxic_iters\n";
+    for (int s = 0; s < 4; ++s) {
+        for (const auto &e : dna_species[s].entries) {
+            out << "species," << s << "," << e.fitness << ","
+                << e.genome.sense_gain << "," << e.genome.pheromone_gain << "," << e.genome.exploration_bias << ","
+                << e.genome.response_matrix[0] << "," << e.genome.response_matrix[1] << "," << e.genome.response_matrix[2] << ","
+                << e.genome.emission_matrix[0] << "," << e.genome.emission_matrix[1] << ","
+                << e.genome.emission_matrix[2] << "," << e.genome.emission_matrix[3] << ","
+                << e.genome.kernel_codons[0] << "," << e.genome.kernel_codons[1] << ","
+                << e.genome.kernel_codons[2] << "," << e.genome.kernel_codons[3] << ","
+                << e.genome.lws_x << "," << e.genome.lws_y << ","
+                << e.genome.toxic_stride << "," << e.genome.toxic_iters << "\n";
+        }
+    }
+    for (const auto &e : dna_global.entries) {
+        out << "global,-1," << e.fitness << ","
+            << e.genome.sense_gain << "," << e.genome.pheromone_gain << "," << e.genome.exploration_bias << ","
+            << e.genome.response_matrix[0] << "," << e.genome.response_matrix[1] << "," << e.genome.response_matrix[2] << ","
+            << e.genome.emission_matrix[0] << "," << e.genome.emission_matrix[1] << ","
+            << e.genome.emission_matrix[2] << "," << e.genome.emission_matrix[3] << ","
+            << e.genome.kernel_codons[0] << "," << e.genome.kernel_codons[1] << ","
+            << e.genome.kernel_codons[2] << "," << e.genome.kernel_codons[3] << ","
+            << e.genome.lws_x << "," << e.genome.lws_y << ","
+            << e.genome.toxic_stride << "," << e.genome.toxic_iters << "\n";
+    }
+    return true;
 }
 
 bool parse_cli(int argc, char **argv, CliOptions &opts) {
@@ -320,12 +476,92 @@ bool parse_cli(int argc, char **argv, CliOptions &opts) {
             opts.report_include_sparklines = false;
             continue;
         }
+        if (arg == "--dna-export") {
+            if (i + 1 >= argc) {
+                std::cerr << "Fehlender Wert fuer " << arg << "\n";
+                return false;
+            }
+            if (!parse_string(argv[i + 1], opts.dna_export_path)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+            i += 1;
+            continue;
+        }
         if (arg == "--stress-enable") {
             opts.stress_enable = true;
             continue;
         }
         if (arg == "--evo-enable") {
             opts.evo_enable = true;
+            continue;
+        }
+        if (arg == "--toxic-enable") {
+            opts.params.toxic_enable = 1;
+            continue;
+        }
+        if (arg == "--toxic-disable") {
+            opts.params.toxic_enable = 0;
+            continue;
+        }
+        if (arg == "--toxic-max-frac-quadrant") {
+            if (i + 2 >= argc) {
+                std::cerr << "Fehlender Wert fuer " << arg << "\n";
+                return false;
+            }
+            int q = 0;
+            float f = 0.0f;
+            if (!parse_int(argv[i + 1], q) || q < 0 || q > 3 || !parse_float(argv[i + 2], f)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+            opts.params.toxic_max_fraction_by_quadrant[q] = f;
+            i += 2;
+            continue;
+        }
+        if (arg == "--toxic-max-frac-species") {
+            if (i + 2 >= argc) {
+                std::cerr << "Fehlender Wert fuer " << arg << "\n";
+                return false;
+            }
+            int s = 0;
+            float f = 0.0f;
+            if (!parse_int(argv[i + 1], s) || s < 0 || s > 3 || !parse_float(argv[i + 2], f)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+            opts.params.toxic_max_fraction_by_species[s] = f;
+            i += 2;
+            continue;
+        }
+        if (arg == "--logic-inputs") {
+            if (i + 4 >= argc) {
+                std::cerr << "Fehlender Wert fuer " << arg << "\n";
+                return false;
+            }
+            if (!parse_int(argv[i + 1], opts.params.logic_input_ax) ||
+                !parse_int(argv[i + 2], opts.params.logic_input_ay) ||
+                !parse_int(argv[i + 3], opts.params.logic_input_bx) ||
+                !parse_int(argv[i + 4], opts.params.logic_input_by)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+            opts.logic_inputs_set = true;
+            i += 4;
+            continue;
+        }
+        if (arg == "--logic-output") {
+            if (i + 2 >= argc) {
+                std::cerr << "Fehlender Wert fuer " << arg << "\n";
+                return false;
+            }
+            if (!parse_int(argv[i + 1], opts.params.logic_output_x) ||
+                !parse_int(argv[i + 2], opts.params.logic_output_y)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+            opts.logic_output_set = true;
+            i += 2;
             continue;
         }
         if (arg == "--stress-block-rect") {
@@ -515,6 +751,11 @@ bool parse_cli(int argc, char **argv, CliOptions &opts) {
                 std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
                 return false;
             }
+        } else if (arg == "--info-cost") {
+            if (!parse_float(value, opts.params.info_metabolism_cost)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
         } else if (arg == "--resources") {
             opts.resources_path = value;
         } else if (arg == "--pheromone") {
@@ -676,6 +917,54 @@ bool parse_cli(int argc, char **argv, CliOptions &opts) {
             }
         } else if (arg == "--evo-age-decay") {
             if (!parse_float(value, opts.evo_age_decay)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+        } else if (arg == "--toxic-max-frac") {
+            if (!parse_float(value, opts.params.toxic_max_fraction)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+        } else if (arg == "--toxic-stride-min") {
+            if (!parse_int(value, opts.params.toxic_stride_min)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+        } else if (arg == "--toxic-stride-max") {
+            if (!parse_int(value, opts.params.toxic_stride_max)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+        } else if (arg == "--toxic-iters-min") {
+            if (!parse_int(value, opts.params.toxic_iters_min)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+        } else if (arg == "--toxic-iters-max") {
+            if (!parse_int(value, opts.params.toxic_iters_max)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+        } else if (arg == "--logic-mode") {
+            bool ok = false;
+            int mode = parse_logic_mode(value, ok);
+            if (!ok) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+            opts.params.logic_mode = mode;
+        } else if (arg == "--logic-pulse-period") {
+            if (!parse_int(value, opts.params.logic_pulse_period)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+        } else if (arg == "--logic-pulse-strength") {
+            if (!parse_float(value, opts.params.logic_pulse_strength)) {
+                std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
+                return false;
+            }
+        } else if (arg == "--log-verbosity") {
+            if (!parse_int(value, opts.log_verbosity)) {
                 std::cerr << "Ungueltiger Wert fuer " << arg << "\n";
                 return false;
             }
@@ -2104,6 +2393,10 @@ int main(int argc, char **argv) {
         return 0;
     }
     SimParams params = opts.params;
+    for (int i = 0; i < 4; ++i) {
+        params.toxic_max_fraction_by_quadrant[i] = opts.params.toxic_max_fraction_by_quadrant[i];
+        params.toxic_max_fraction_by_species[i] = opts.params.toxic_max_fraction_by_species[i];
+    }
     Rng rng(opts.seed);
     if (!opts.stress_seed_set) {
         opts.stress_seed = opts.seed;
@@ -2127,8 +2420,38 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
+    if (params.toxic_max_fraction < 0.0f || params.toxic_max_fraction > 1.0f) {
+        std::cerr << "Ungueltiger Wert fuer --toxic-max-frac\n";
+        return 1;
+    }
+    for (int i = 0; i < 4; ++i) {
+        if (params.toxic_max_fraction_by_quadrant[i] < 0.0f || params.toxic_max_fraction_by_quadrant[i] > 1.0f) {
+            std::cerr << "Ungueltiger Wert fuer --toxic-max-frac-quadrant\n";
+            return 1;
+        }
+        if (params.toxic_max_fraction_by_species[i] < 0.0f || params.toxic_max_fraction_by_species[i] > 1.0f) {
+            std::cerr << "Ungueltiger Wert fuer --toxic-max-frac-species\n";
+            return 1;
+        }
+    }
+    if (params.toxic_stride_min <= 0 || params.toxic_stride_max < params.toxic_stride_min) {
+        std::cerr << "Ungueltige Werte fuer --toxic-stride-min/max\n";
+        return 1;
+    }
+    if (params.toxic_iters_min < 0 || params.toxic_iters_max < params.toxic_iters_min) {
+        std::cerr << "Ungueltige Werte fuer --toxic-iters-min/max\n";
+        return 1;
+    }
+    if (opts.log_verbosity < 0 || opts.log_verbosity > 2) {
+        std::cerr << "Ungueltiger Wert fuer --log-verbosity\n";
+        return 1;
+    }
     if (opts.dump_every < 0) {
         std::cerr << "Ungueltiger Wert fuer --dump-every\n";
+        return 1;
+    }
+    if (params.info_metabolism_cost < 0.0f) {
+        std::cerr << "Ungueltiger Wert fuer --info-cost\n";
         return 1;
     }
     if (opts.report_downsample < 0) {
@@ -2203,6 +2526,41 @@ int main(int argc, char **argv) {
     if (!apply_dataset(opts.pheromone_path, pheromone_data, "pheromone")) return 1;
     if (!apply_dataset(opts.molecules_path, molecules_data, "molecules")) return 1;
 
+    if (params.logic_input_ax < 0 || params.logic_input_ay < 0 ||
+        params.logic_input_bx < 0 || params.logic_input_by < 0) {
+        params.logic_input_ax = params.width / 4;
+        params.logic_input_ay = params.height / 4;
+        params.logic_input_bx = params.width / 4;
+        params.logic_input_by = (params.height * 3) / 4;
+    }
+    if (params.logic_output_x < 0 || params.logic_output_y < 0) {
+        params.logic_output_x = (params.width * 3) / 4;
+        params.logic_output_y = params.height / 2;
+    }
+    if (params.logic_mode < 0 || params.logic_mode > 3) {
+        std::cerr << "Ungueltiger Wert fuer --logic-mode\n";
+        return 1;
+    }
+    if (params.logic_pulse_period <= 0) {
+        std::cerr << "Ungueltiger Wert fuer --logic-pulse-period\n";
+        return 1;
+    }
+    if (params.logic_pulse_strength < 0.0f) {
+        std::cerr << "Ungueltiger Wert fuer --logic-pulse-strength\n";
+        return 1;
+    }
+    if (params.logic_mode != 0) {
+        auto in_bounds = [&](int x, int y) -> bool {
+            return x >= 0 && y >= 0 && x < params.width && y < params.height;
+        };
+        if (!in_bounds(params.logic_input_ax, params.logic_input_ay) ||
+            !in_bounds(params.logic_input_bx, params.logic_input_by) ||
+            !in_bounds(params.logic_output_x, params.logic_output_y)) {
+            std::cerr << "Logic-Input/Output ausserhalb des Rasters\n";
+            return 1;
+        }
+    }
+
     OpenCLStatus ocl_probe = probe_opencl();
     std::cout << "[OpenCL] " << ocl_probe.message << "\n";
 
@@ -2213,8 +2571,10 @@ int main(int argc, char **argv) {
         env.seed_resources(rng);
     }
 
+    // phero_food/phero_danger act as semantic channels Alpha/Beta (kept names for compatibility).
     GridField phero_food(params.width, params.height, 0.0f);
     GridField phero_danger(params.width, params.height, 0.0f);
+    GridField phero_gamma(params.width, params.height, 0.0f);
     GridField molecules(params.width, params.height, 0.0f);
     MycelNetwork mycel(params.width, params.height);
     if (!pheromone_data.values.empty()) {
@@ -2236,11 +2596,67 @@ int main(int argc, char **argv) {
     std::vector<Agent> agents;
     agents.reserve(params.agent_count);
 
+    const int codon_max = 7;
+    const int lws_min = 0;
+    const int lws_max = 32;
+    const int toxic_stride_min = std::max(1, params.toxic_stride_min);
+    const int toxic_stride_max = std::max(toxic_stride_min, params.toxic_stride_max);
+    const int toxic_iters_min = std::max(0, params.toxic_iters_min);
+    const int toxic_iters_max = std::max(toxic_iters_min, params.toxic_iters_max);
+    const bool toxic_enabled = params.toxic_enable != 0;
+    auto randomize_codons = [&](Genome &g) {
+        for (int i = 0; i < 4; ++i) {
+            g.kernel_codons[i] = rng.uniform_int(0, codon_max);
+        }
+        g.lws_x = rng.uniform_int(lws_min, lws_max);
+        g.lws_y = rng.uniform_int(lws_min, lws_max);
+        g.toxic_stride = rng.uniform_int(toxic_stride_min, toxic_stride_max);
+        g.toxic_iters = rng.uniform_int(toxic_iters_min, toxic_iters_max);
+        if (!toxic_enabled) {
+            g.toxic_iters = 0;
+        }
+    };
+    auto clamp_codons = [&](Genome &g) {
+        for (int i = 0; i < 4; ++i) {
+            g.kernel_codons[i] = std::min(codon_max, std::max(0, g.kernel_codons[i]));
+        }
+        g.lws_x = std::min(lws_max, std::max(lws_min, g.lws_x));
+        g.lws_y = std::min(lws_max, std::max(lws_min, g.lws_y));
+        g.toxic_stride = std::min(toxic_stride_max, std::max(toxic_stride_min, g.toxic_stride));
+        g.toxic_iters = std::min(toxic_iters_max, std::max(toxic_iters_min, g.toxic_iters));
+        if (!toxic_enabled) {
+            g.toxic_iters = 0;
+        }
+    };
+    auto mutate_codons = [&](Genome &g, float prob) {
+        if (prob <= 0.0f) return;
+        for (int i = 0; i < 4; ++i) {
+            if (rng.uniform(0.0f, 1.0f) < prob) {
+                g.kernel_codons[i] = rng.uniform_int(0, codon_max);
+            }
+        }
+        if (rng.uniform(0.0f, 1.0f) < prob) {
+            g.lws_x = rng.uniform_int(lws_min, lws_max);
+        }
+        if (rng.uniform(0.0f, 1.0f) < prob) {
+            g.lws_y = rng.uniform_int(lws_min, lws_max);
+        }
+        if (rng.uniform(0.0f, 1.0f) < prob) {
+            g.toxic_stride = rng.uniform_int(toxic_stride_min, toxic_stride_max);
+        }
+        if (rng.uniform(0.0f, 1.0f) < prob) {
+            g.toxic_iters = rng.uniform_int(toxic_iters_min, toxic_iters_max);
+        }
+    };
+
     auto random_genome = [&]() -> Genome {
         Genome g;
         g.sense_gain = rng.uniform(0.6f, 1.4f);
         g.pheromone_gain = rng.uniform(0.6f, 1.4f);
         g.exploration_bias = rng.uniform(0.2f, 0.8f);
+        randomize_semantics(rng, g);
+        clamp_semantics(g);
+        randomize_codons(g);
         return g;
     };
 
@@ -2254,9 +2670,18 @@ int main(int argc, char **argv) {
         if (delta > 0.0f) {
             g.exploration_bias += rng.uniform(-delta, delta);
         }
+        g.response_matrix[0] += gaussian(rng, sigma);
+        g.response_matrix[1] += gaussian(rng, sigma);
+        g.response_matrix[2] += gaussian(rng, sigma);
+        for (int i = 0; i < 4; ++i) {
+            g.emission_matrix[i] += gaussian(rng, sigma);
+        }
+        mutate_codons(g, std::min(0.5f, sigma * 2.0f));
         g.sense_gain = std::min(3.0f, std::max(0.2f, g.sense_gain));
         g.pheromone_gain = std::min(3.0f, std::max(0.2f, g.pheromone_gain));
         g.exploration_bias = std::min(1.0f, std::max(0.0f, g.exploration_bias));
+        clamp_semantics(g);
+        clamp_codons(g);
     };
 
     auto sample_genome = [&](int species) -> Genome {
@@ -2271,6 +2696,7 @@ int main(int argc, char **argv) {
             }
         } else {
             g = random_genome();
+            apply_semantic_defaults(g, profile);
         }
         if (opts.evo_enable) {
             apply_role_mutation(g, profile);
@@ -2318,7 +2744,7 @@ int main(int argc, char **argv) {
             std::cerr << "[OpenCL] init failed, fallback to CPU: " << ocl_error << "\n";
         } else if (!ocl_runtime.build_kernels(ocl_error)) {
             std::cerr << "[OpenCL] kernel build failed, fallback to CPU: " << ocl_error << "\n";
-        } else if (!ocl_runtime.init_fields(phero_food, phero_danger, molecules, ocl_error)) {
+        } else if (!ocl_runtime.init_fields(phero_food, phero_danger, phero_gamma, molecules, ocl_error)) {
             std::cerr << "[OpenCL] buffer init failed, fallback to CPU: " << ocl_error << "\n";
         } else {
             std::cout << "[OpenCL] platform/device: " << ocl_runtime.device_info() << "\n";
@@ -2342,21 +2768,24 @@ int main(int argc, char **argv) {
         GridField cpu_pf = pf;
         GridField cpu_pd = pd;
         GridField cpu_m = m;
+        GridField pg(pf.width, pf.height, 0.0f);
+        GridField cpu_pg = pg;
         FieldParams fp{0.02f, 0.15f};
         FieldParams fm{0.35f, 0.25f};
         for (int i = 0; i < 5; ++i) {
             diffuse_and_evaporate(cpu_pf, fp);
             diffuse_and_evaporate(cpu_pd, fp);
+            diffuse_and_evaporate(cpu_pg, fp);
             diffuse_and_evaporate(cpu_m, fm);
         }
 
         std::string error;
-        if (!runtime.init_fields(pf, pd, m, error)) {
+        if (!runtime.init_fields(pf, pd, pg, m, error)) {
             std::cerr << "[OpenCL] self-test init failed: " << error << "\n";
             return false;
         }
         for (int i = 0; i < 5; ++i) {
-            if (!runtime.step_diffuse(fp, fm, true, pf, pd, m, error)) {
+            if (!runtime.step_diffuse(fp, fm, true, pf, pd, pg, m, error)) {
                 std::cerr << "[OpenCL] self-test step failed: " << error << "\n";
                 return false;
             }
@@ -2384,7 +2813,7 @@ int main(int argc, char **argv) {
             ocl_active = false;
         } else {
             std::string ocl_error;
-            if (!ocl_runtime.init_fields(phero_food, phero_danger, molecules, ocl_error)) {
+            if (!ocl_runtime.init_fields(phero_food, phero_danger, phero_gamma, molecules, ocl_error)) {
                 std::cerr << "[OpenCL] buffer init failed, fallback to CPU: " << ocl_error << "\n";
                 ocl_active = false;
             } else {
@@ -2435,12 +2864,103 @@ int main(int argc, char **argv) {
     Rng stress_rng(opts.stress_seed);
     std::vector<SystemMetrics> system_metrics;
     system_metrics.reserve(static_cast<size_t>(params.steps));
+    bool last_physics_valid = true;
+    auto field_sum = [](const GridField &field) -> double {
+        double sum = 0.0;
+        for (float v : field.data) {
+            sum += static_cast<double>(v);
+        }
+        return sum;
+    };
+    auto compute_stagnation = [&]() -> float {
+        if (!dna_global.entries.empty()) {
+            return calculate_genetic_stagnation(dna_global.entries);
+        }
+        std::vector<DNAEntry> merged;
+        for (const auto &pool : dna_species) {
+            merged.insert(merged.end(), pool.entries.begin(), pool.entries.end());
+        }
+        if (merged.empty()) {
+            return 1.0f;
+        }
+        return calculate_genetic_stagnation(merged);
+    };
+    auto inject_gamma = [&](float base, const float quad_ns[4]) {
+        if (base > 0.0f) {
+            for (float &v : phero_gamma.data) {
+                v += base;
+            }
+        }
+        int mid_x = params.width / 2;
+        int mid_y = params.height / 2;
+        struct Quad {
+            int x0;
+            int y0;
+            int x1;
+            int y1;
+        };
+        Quad quads[4] = {
+            {0, 0, mid_x, mid_y},
+            {mid_x, 0, params.width, mid_y},
+            {0, mid_y, mid_x, params.height},
+            {mid_x, mid_y, params.width, params.height}
+        };
+        const float scale = 1.0f / 1000000.0f;
+        for (int q = 0; q < 4; ++q) {
+            float v = clamp01(static_cast<float>(quad_ns[q]) * scale);
+            if (v <= 0.0f) {
+                continue;
+            }
+            for (int y = quads[q].y0; y < quads[q].y1; ++y) {
+                for (int x = quads[q].x0; x < quads[q].x1; ++x) {
+                    phero_gamma.at(x, y) += v;
+                }
+            }
+        }
+    };
+    int logic_case = 0;
+    int logic_active_case = 0;
+    float logic_last_score = 0.5f;
+    float logic_path_radius = std::max(2.0f, std::min(params.width, params.height) * 0.05f);
+    auto sample_output = [&](const GridField &field) -> float {
+        int x0 = std::max(0, params.logic_output_x - 1);
+        int x1 = std::min(params.width - 1, params.logic_output_x + 1);
+        int y0 = std::max(0, params.logic_output_y - 1);
+        int y1 = std::min(params.height - 1, params.logic_output_y + 1);
+        float sum = 0.0f;
+        int count = 0;
+        for (int y = y0; y <= y1; ++y) {
+            for (int x = x0; x <= x1; ++x) {
+                sum += field.at(x, y);
+                count++;
+            }
+        }
+        return (count > 0) ? (sum / static_cast<float>(count)) : 0.0f;
+    };
 
     for (int step = 0; step < params.steps; ++step) {
         bool dump_step = (opts.dump_every > 0 && step % opts.dump_every == 0);
+        float quad_ns[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        if (ocl_active) {
+            ocl_runtime.last_quadrant_exhaustion_ns(quad_ns);
+        }
+        float stagnation = compute_stagnation();
+        inject_gamma(stagnation, quad_ns);
+        if (params.logic_mode != 0 && (step % params.logic_pulse_period == 0)) {
+            logic_active_case = logic_case;
+            int a = (logic_active_case >> 0) & 1;
+            int b = (logic_active_case >> 1) & 1;
+            if (a) {
+                phero_food.at(params.logic_input_ax, params.logic_input_ay) += params.logic_pulse_strength;
+            }
+            if (b) {
+                phero_food.at(params.logic_input_bx, params.logic_input_by) += params.logic_pulse_strength;
+            }
+            logic_case = (logic_case + 1) & 3;
+        }
         if (ocl_active && opts.ocl_no_copyback && dump_step) {
             std::string ocl_error;
-            if (!ocl_runtime.copyback(phero_food, phero_danger, molecules, ocl_error)) {
+            if (!ocl_runtime.copyback(phero_food, phero_danger, phero_gamma, molecules, ocl_error)) {
                 std::cerr << "[OpenCL] copyback failed, fallback to CPU: " << ocl_error << "\n";
                 ocl_active = false;
             }
@@ -2460,11 +2980,38 @@ int main(int argc, char **argv) {
         }
         for (auto &agent : agents) {
             const SpeciesProfile &profile = opts.species_profiles[agent.species];
-            agent.step(rng, params, opts.evo_enable ? opts.evo_fitness_window : 0, profile, phero_food, phero_danger, molecules, env.resources, mycel.density);
+            int fitness_window = (opts.evo_enable && params.logic_mode == 0) ? opts.evo_fitness_window : 0;
+            agent.step(rng, params, fitness_window, profile, phero_food, phero_danger, phero_gamma, molecules, env.resources, mycel.density);
+            if (opts.evo_enable && params.logic_mode != 0) {
+                float dist_a = distance_to_segment(static_cast<float>(params.logic_input_ax),
+                                                   static_cast<float>(params.logic_input_ay),
+                                                   static_cast<float>(params.logic_output_x),
+                                                   static_cast<float>(params.logic_output_y),
+                                                   agent.x, agent.y);
+                float dist_b = distance_to_segment(static_cast<float>(params.logic_input_bx),
+                                                   static_cast<float>(params.logic_input_by),
+                                                   static_cast<float>(params.logic_output_x),
+                                                   static_cast<float>(params.logic_output_y),
+                                                   agent.x, agent.y);
+                float dist = std::min(dist_a, dist_b);
+                float weight = 0.0f;
+                if (dist <= logic_path_radius) {
+                    weight = 1.0f - (dist / logic_path_radius);
+                }
+                agent.fitness_value = logic_last_score * weight;
+            }
             if (opts.evo_enable) {
                 if (agent.energy > opts.evo_min_energy_to_store) {
-                    dna_species[agent.species].add(params, agent.genome, agent.fitness_value, evo, params.dna_capacity);
-                    maybe_add_global(agent.genome, agent.fitness_value);
+                    float fitness = agent.fitness_value;
+                    if (ocl_active) {
+                        float hw_penalty_ms = ocl_runtime.last_hardware_exhaustion_ns() / 1000000.0f;
+                        fitness = agent.fitness_value / (hw_penalty_ms + 0.0001f);
+                        if (!last_physics_valid) {
+                            fitness *= 0.01f;
+                        }
+                    }
+                    dna_species[agent.species].add(params, agent.genome, fitness, evo, params.dna_capacity);
+                    maybe_add_global(agent.genome, fitness);
                     agent.energy *= 0.6f;
                 }
             } else {
@@ -2475,28 +3022,196 @@ int main(int argc, char **argv) {
             }
         }
 
-        if (ocl_active) {
-            std::string ocl_error;
-            if (!ocl_runtime.upload_fields(phero_food, phero_danger, molecules, ocl_error)) {
-                std::cerr << "[OpenCL] upload failed, fallback to CPU: " << ocl_error << "\n";
-                ocl_active = false;
+        if (ocl_active && opts.evo_enable) {
+            struct QuadPick {
+                Genome genome;
+                float score = -1.0f;
+                bool has = false;
+                bool from_global = false;
+                int species = 0;
+            };
+            QuadPick picks[4];
+            auto is_toxic_extra = [](int idx) -> bool {
+                return idx >= 4;
+            };
+            const char *sum_names[] = {"standard", "mad", "alt", "sin_bias"};
+            const char *neigh_names[] = {"h+v", "packed", "vector4", "skew"};
+            const char *extra_names[] = {"none", "sin", "exp", "local_scatter", "local_atomic", "bank_conflict", "global_atomic", "unaligned_v4"};
+            const char *out_names[] = {"clamp", "evap_sub", "ternary", "sinexp_mix"};
+
+            int mid_x = params.width / 2;
+            int mid_y = params.height / 2;
+            for (const auto &agent : agents) {
+                int q = 0;
+                if (agent.x >= static_cast<float>(mid_x)) q += 1;
+                if (agent.y >= static_cast<float>(mid_y)) q += 2;
+                float score = (agent.fitness_value > 0.0f) ? agent.fitness_value : agent.energy;
+                if (!picks[q].has || score > picks[q].score) {
+                    picks[q].genome = agent.genome;
+                    picks[q].score = score;
+                    picks[q].has = true;
+                    picks[q].from_global = false;
+                    picks[q].species = agent.species;
+                }
+            }
+
+            for (int q = 0; q < 4; ++q) {
+                if (!picks[q].has) {
+                    if (!dna_global.entries.empty()) {
+                        picks[q].genome = dna_global.entries.front().genome;
+                        picks[q].from_global = true;
+                        picks[q].species = 0;
+                    } else {
+                        picks[q].genome = random_genome();
+                        picks[q].from_global = false;
+                        picks[q].species = 0;
+                    }
+                    picks[q].has = true;
+                }
+            }
+
+            int lws[4][2] = {};
+            for (int q = 0; q < 4; ++q) {
+                lws[q][0] = picks[q].genome.lws_x;
+                lws[q][1] = picks[q].genome.lws_y;
+            }
+            ocl_runtime.set_quadrant_lws(lws);
+
+            if (step % 500 == 0) {
+                int toxic_hits[4] = {0, 0, 0, 0};
+                int total_counts[4] = {0, 0, 0, 0};
+                for (int q = 0; q < 4; ++q) {
+                    int codons[4] = {
+                        picks[q].genome.kernel_codons[0],
+                        picks[q].genome.kernel_codons[1],
+                        picks[q].genome.kernel_codons[2],
+                        picks[q].genome.kernel_codons[3]
+                    };
+                    total_counts[q] = 1;
+                    bool toxic_allowed = (params.toxic_enable != 0) && (params.toxic_max_fraction > 0.0f);
+                    float gate = params.toxic_max_fraction;
+                    if (params.toxic_max_fraction_by_quadrant[q] < gate) {
+                        gate = params.toxic_max_fraction_by_quadrant[q];
+                    }
+                    if (params.toxic_max_fraction_by_species[picks[q].species] < gate) {
+                        gate = params.toxic_max_fraction_by_species[picks[q].species];
+                    }
+                    int toxic_stride = std::min(toxic_stride_max, std::max(toxic_stride_min, picks[q].genome.toxic_stride));
+                    int toxic_iters = std::min(toxic_iters_max, std::max(toxic_iters_min, picks[q].genome.toxic_iters));
+                    if (!toxic_allowed) {
+                        toxic_iters = 0;
+                    }
+                    if (is_toxic_extra(codons[2])) {
+                        if (!toxic_allowed || rng.uniform(0.0f, 1.0f) > gate) {
+                            codons[2] = 0;
+                        } else {
+                            toxic_hits[q] += 1;
+                        }
+                    }
+                    std::string build_err;
+                    if (!ocl_runtime.assemble_evolved_kernel_quadrant(q,
+                                                                      codons,
+                                                                      toxic_stride,
+                                                                      toxic_iters,
+                                                                      build_err)) {
+                        std::cerr << "[Hardware-Mutation-Error] quadrant=" << q << " " << build_err << "\n";
+                        if (picks[q].from_global && !dna_global.entries.empty()) {
+                            dna_global.entries.front().fitness *= 0.1f;
+                            std::sort(dna_global.entries.begin(), dna_global.entries.end(), [](const DNAEntry &a, const DNAEntry &b) {
+                                return a.fitness > b.fitness;
+                            });
+                        }
+                    } else {
+                        auto pick_name = [](const char *const *names, int count, int idx) -> const char * {
+                            if (count <= 0) return "";
+                            int fixed = idx % count;
+                            if (fixed < 0) fixed += count;
+                            return names[fixed];
+                        };
+                        if (opts.log_verbosity >= 1) {
+                            std::cout << "[Hardware-Mutation] quadrant=" << q
+                                      << " codons=["
+                                      << codons[0] << ","
+                                      << codons[1] << ","
+                                      << codons[2] << ","
+                                      << codons[3] << "]"
+                                      << " lws=(" << picks[q].genome.lws_x << "x" << picks[q].genome.lws_y << ")"
+                                      << " tox=(" << toxic_stride << "," << toxic_iters << ")"
+                                      << " gate=" << gate
+                                      << "\n";
+                            if (opts.log_verbosity >= 2) {
+                                std::cout << "[Hardware-Mutation-Map] quadrant=" << q
+                                          << " sum=" << pick_name(sum_names, 4, codons[0])
+                                          << " neigh=" << pick_name(neigh_names, 4, codons[1])
+                                          << " extra=" << pick_name(extra_names, 8, codons[2])
+                                          << " out=" << pick_name(out_names, 4, codons[3])
+                                          << "\n";
+                                std::cout << "[Semantics] quadrant=" << q
+                                          << " response=[" << picks[q].genome.response_matrix[0] << "," << picks[q].genome.response_matrix[1]
+                                          << "," << picks[q].genome.response_matrix[2] << "]"
+                                          << " emit=[" << picks[q].genome.emission_matrix[0] << "," << picks[q].genome.emission_matrix[1]
+                                          << "," << picks[q].genome.emission_matrix[2] << "," << picks[q].genome.emission_matrix[3] << "]"
+                                          << "\n";
+                            }
+                        }
+                    }
+                }
+                if (opts.log_verbosity >= 1) {
+                    std::cout << "[Toxic-Hist] step=" << step
+                              << " q0=" << toxic_hits[0] << "/" << total_counts[0]
+                              << " q1=" << toxic_hits[1] << "/" << total_counts[1]
+                              << " q2=" << toxic_hits[2] << "/" << total_counts[2]
+                              << " q3=" << toxic_hits[3] << "/" << total_counts[3]
+                              << "\n";
+                }
             }
         }
-
+        bool cpu_diffused = false;
         if (ocl_active) {
-            bool do_copyback = (!opts.ocl_no_copyback) || dump_step;
+            double pre_food_sum = field_sum(phero_food);
+            double pre_danger_sum = field_sum(phero_danger);
+            double pre_mol_sum = field_sum(molecules);
             std::string ocl_error;
-            if (!ocl_runtime.step_diffuse(pheromone_params, molecule_params, do_copyback, phero_food, phero_danger, molecules, ocl_error)) {
-                std::cerr << "[OpenCL] diffuse failed, fallback to CPU: " << ocl_error << "\n";
+            if (!ocl_runtime.upload_fields(phero_food, phero_danger, phero_gamma, molecules, ocl_error)) {
+                std::cerr << "[OpenCL] upload failed, fallback to CPU: " << ocl_error << "\n";
                 ocl_active = false;
-                diffuse_and_evaporate(phero_food, pheromone_params);
-                diffuse_and_evaporate(phero_danger, pheromone_params);
-                diffuse_and_evaporate(molecules, molecule_params);
+            } else {
+                bool do_copyback = (!opts.ocl_no_copyback) || dump_step;
+                if (!ocl_runtime.step_diffuse(pheromone_params, molecule_params, do_copyback, phero_food, phero_danger, phero_gamma, molecules, ocl_error)) {
+                    std::cerr << "[OpenCL] diffuse failed, fallback to CPU: " << ocl_error << "\n";
+                    ocl_active = false;
+                    diffuse_and_evaporate(phero_food, pheromone_params);
+                    diffuse_and_evaporate(phero_danger, pheromone_params);
+                    diffuse_and_evaporate(phero_gamma, pheromone_params);
+                    diffuse_and_evaporate(molecules, molecule_params);
+                    cpu_diffused = true;
+                } else if (do_copyback) {
+                    auto valid_sum = [](double pre, double post, float evap) -> bool {
+                        if (!std::isfinite(pre) || !std::isfinite(post)) return false;
+                        double expected = pre * (1.0 - static_cast<double>(evap));
+                        if (expected < 1e-6) {
+                            return post >= -1e-3;
+                        }
+                        double min_allowed = expected * 0.5;
+                        double max_allowed = pre * 1.1;
+                        return post >= min_allowed && post <= max_allowed;
+                    };
+                    double post_food_sum = field_sum(phero_food);
+                    double post_danger_sum = field_sum(phero_danger);
+                    double post_mol_sum = field_sum(molecules);
+                    bool ok_food = valid_sum(pre_food_sum, post_food_sum, pheromone_params.evaporation);
+                    bool ok_danger = valid_sum(pre_danger_sum, post_danger_sum, pheromone_params.evaporation);
+                    bool ok_mol = valid_sum(pre_mol_sum, post_mol_sum, molecule_params.evaporation);
+                    last_physics_valid = ok_food && ok_danger && ok_mol;
+                }
             }
-        } else {
+        }
+        if (!ocl_active && !cpu_diffused) {
             diffuse_and_evaporate(phero_food, pheromone_params);
             diffuse_and_evaporate(phero_danger, pheromone_params);
+            diffuse_and_evaporate(phero_gamma, pheromone_params);
             diffuse_and_evaporate(molecules, molecule_params);
+            last_physics_valid = true;
         }
 
         if (opts.stress_enable && stress_applied && opts.stress_pheromone_noise > 0.0f) {
@@ -2511,6 +3226,12 @@ int main(int argc, char **argv) {
         }
 
         mycel.update(params, phero_food, env.resources);
+        if (params.logic_mode != 0) {
+            float measured = sample_output(mycel.density);
+            int target = logic_target_for_case(params.logic_mode, logic_active_case);
+            float score = 1.0f - std::abs(static_cast<float>(target) - clamp01(measured));
+            logic_last_score = clamp01(score);
+        }
         env.regenerate(params);
         for (auto &pool : dna_species) {
             pool.decay(evo);
@@ -2533,20 +3254,31 @@ int main(int argc, char **argv) {
         }
 
         float avg_energy = 0.0f;
+        float avg_cognitive_load = 0.0f;
         std::array<float, 4> energy_sum{0.0f, 0.0f, 0.0f, 0.0f};
         std::array<int, 4> energy_count{0, 0, 0, 0};
         for (const auto &agent : agents) {
             avg_energy += agent.energy;
+            float cog = std::abs(agent.genome.response_matrix[0]) +
+                        std::abs(agent.genome.response_matrix[1]) +
+                        std::abs(agent.genome.response_matrix[2]) +
+                        std::abs(agent.genome.emission_matrix[0]) +
+                        std::abs(agent.genome.emission_matrix[1]) +
+                        std::abs(agent.genome.emission_matrix[2]) +
+                        std::abs(agent.genome.emission_matrix[3]);
+            avg_cognitive_load += cog;
             if (agent.species >= 0 && agent.species < 4) {
                 energy_sum[agent.species] += agent.energy;
                 energy_count[agent.species] += 1;
             }
         }
         avg_energy /= static_cast<float>(agents.size());
+        avg_cognitive_load /= static_cast<float>(agents.size());
 
         SystemMetrics m;
         m.step = step;
         m.avg_agent_energy = avg_energy;
+        m.avg_cognitive_load = avg_cognitive_load;
         int dna_total = 0;
         for (int s = 0; s < 4; ++s) {
             m.dna_species_sizes[s] = static_cast<int>(dna_species[s].entries.size());
@@ -2578,7 +3310,7 @@ int main(int argc, char **argv) {
 
     if (ocl_active && opts.ocl_no_copyback) {
         std::string ocl_error;
-        if (!ocl_runtime.copyback(phero_food, phero_danger, molecules, ocl_error)) {
+        if (!ocl_runtime.copyback(phero_food, phero_danger, phero_gamma, molecules, ocl_error)) {
             std::cerr << "[OpenCL] final copyback failed: " << ocl_error << "\n";
             return 1;
         }
@@ -2595,8 +3327,9 @@ int main(int argc, char **argv) {
         report_opts.hist_bins = opts.report_hist_bins;
         report_opts.include_sparklines = opts.report_include_sparklines;
         report_opts.system_metrics = system_metrics;
+        std::ostringstream scenario;
+        bool has_scenario = false;
         if (opts.stress_enable) {
-            std::ostringstream scenario;
             scenario << "stress_enable=true";
             scenario << ", at_step=" << opts.stress_at_step;
             if (opts.stress_block_rect_set) {
@@ -2609,6 +3342,32 @@ int main(int argc, char **argv) {
             if (opts.stress_pheromone_noise > 0.0f) {
                 scenario << ", pheromone_noise=" << opts.stress_pheromone_noise;
             }
+            has_scenario = true;
+        }
+        const Genome *top = nullptr;
+        float best_fit = -1.0f;
+        if (!dna_global.entries.empty()) {
+            top = &dna_global.entries.front().genome;
+        } else {
+            for (const auto &pool : dna_species) {
+                for (const auto &entry : pool.entries) {
+                    if (entry.fitness > best_fit) {
+                        best_fit = entry.fitness;
+                        top = &entry.genome;
+                    }
+                }
+            }
+        }
+        if (top) {
+            if (has_scenario) {
+                scenario << " | ";
+            }
+            scenario << "top_semantics=response[" << top->response_matrix[0] << "," << top->response_matrix[1] << "," << top->response_matrix[2]
+                     << "] emit[" << top->emission_matrix[0] << "," << top->emission_matrix[1] << ","
+                     << top->emission_matrix[2] << "," << top->emission_matrix[3] << "]";
+            has_scenario = true;
+        }
+        if (has_scenario) {
             report_opts.scenario_summary = scenario.str();
         }
         std::string report_error;
@@ -2623,6 +3382,14 @@ int main(int argc, char **argv) {
             report_path = opts.report_html_path;
         }
         std::cout << "report=" << report_path.string() << "\n";
+    }
+
+    if (!opts.dna_export_path.empty()) {
+        if (!export_dna_csv(opts.dna_export_path, dna_species, dna_global)) {
+            std::cerr << "DNA-Export fehlgeschlagen: " << opts.dna_export_path << "\n";
+            return 1;
+        }
+        std::cout << "dna_export=" << opts.dna_export_path << "\n";
     }
 
     std::cout << "done\n";

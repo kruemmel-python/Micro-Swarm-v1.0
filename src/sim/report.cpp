@@ -265,6 +265,8 @@ bool generate_dump_report_html(const ReportOptions &opts, std::string &error) {
         std::map<std::string, FieldStats> stats;
         std::map<std::string, std::string> previews;
         std::map<std::string, std::filesystem::path> paths;
+        FieldStats alpha_beta_stats;
+        std::string alpha_beta_preview;
     };
 
     std::vector<StepData> steps;
@@ -318,6 +320,24 @@ bool generate_dump_report_html(const ReportOptions &opts, std::string &error) {
                 step.previews[field] = render_svg_heatmap(down, opts.downsample, step.stats[field].min, step.stats[field].max);
             }
         }
+
+        auto alpha_it = step.grids.find("phero_food");
+        auto beta_it = step.grids.find("phero_danger");
+        if (alpha_it != step.grids.end() && beta_it != step.grids.end()) {
+            const auto &alpha = alpha_it->second.values;
+            const auto &beta = beta_it->second.values;
+            std::vector<float> diff(alpha.size(), 0.0f);
+            for (size_t i = 0; i < diff.size(); ++i) {
+                diff[i] = alpha[i] - beta[i];
+            }
+            step.alpha_beta_stats = compute_stats(diff, opts.hist_bins);
+            if (opts.downsample > 0) {
+                std::vector<float> down = downsample_grid(step.width, step.height, diff, opts.downsample);
+                step.alpha_beta_preview = render_svg_heatmap(down, opts.downsample,
+                                                            step.alpha_beta_stats.min,
+                                                            step.alpha_beta_stats.max);
+            }
+        }
     }
 
     std::map<std::string, std::pair<float, float>> global_minmax;
@@ -338,6 +358,21 @@ bool generate_dump_report_html(const ReportOptions &opts, std::string &error) {
         }
         global_minmax[field] = {gmin, gmax};
     }
+    float alpha_beta_global_min = 0.0f;
+    float alpha_beta_global_max = 0.0f;
+    {
+        bool init = false;
+        for (const auto &step : steps) {
+            if (!init) {
+                alpha_beta_global_min = step.alpha_beta_stats.min;
+                alpha_beta_global_max = step.alpha_beta_stats.max;
+                init = true;
+            } else {
+                alpha_beta_global_min = std::min(alpha_beta_global_min, step.alpha_beta_stats.min);
+                alpha_beta_global_max = std::max(alpha_beta_global_max, step.alpha_beta_stats.max);
+            }
+        }
+    }
 
     if (opts.global_normalization && opts.downsample > 0) {
         for (auto &step : steps) {
@@ -346,6 +381,17 @@ bool generate_dump_report_html(const ReportOptions &opts, std::string &error) {
                 std::vector<float> down = downsample_grid(grid.width, grid.height, grid.values, opts.downsample);
                 auto minmax = global_minmax[field];
                 step.previews[field] = render_svg_heatmap(down, opts.downsample, minmax.first, minmax.second);
+            }
+            if (!step.alpha_beta_preview.empty()) {
+                const auto &alpha = step.grids.at("phero_food").values;
+                const auto &beta = step.grids.at("phero_danger").values;
+                std::vector<float> diff(alpha.size(), 0.0f);
+                for (size_t i = 0; i < diff.size(); ++i) {
+                    diff[i] = alpha[i] - beta[i];
+                }
+                std::vector<float> down = downsample_grid(step.width, step.height, diff, opts.downsample);
+                step.alpha_beta_preview = render_svg_heatmap(down, opts.downsample,
+                                                             alpha_beta_global_min, alpha_beta_global_max);
             }
         }
     }
@@ -456,6 +502,29 @@ bool generate_dump_report_html(const ReportOptions &opts, std::string &error) {
         }
         out << "</table>";
 
+        out << "<h2>Semantics (Alpha/Beta)</h2>";
+        out << "<table>";
+        out << "<tr><th>Metric</th><th>Sparkline</th></tr>";
+        auto series_for = [&](auto getter) {
+            std::vector<float> series;
+            series.reserve(steps.size());
+            for (const auto &step : steps) {
+                series.push_back(static_cast<float>(getter(step)));
+            }
+            return series;
+        };
+        auto add_sem_row = [&](const std::string &label, const std::vector<float> &series) {
+            float minv = 0.0f;
+            float maxv = 0.0f;
+            std::string s = sparkline(series, minv, maxv);
+            out << "<tr><td>" << label << "</td><td>" << s
+                << " <span>(" << std::fixed << std::setprecision(4) << minv << " .. " << maxv << ")</span></td></tr>";
+        };
+        add_sem_row("alpha_mean", series_for([](const StepData &s) { return s.stats.at("phero_food").mean; }));
+        add_sem_row("beta_mean", series_for([](const StepData &s) { return s.stats.at("phero_danger").mean; }));
+        add_sem_row("alpha_minus_beta_mean", series_for([](const StepData &s) { return s.alpha_beta_stats.mean; }));
+        out << "</table>";
+
         if (!system_by_step.empty()) {
             out << "<h2>System over time</h2>";
             out << "<table>";
@@ -492,6 +561,7 @@ bool generate_dump_report_html(const ReportOptions &opts, std::string &error) {
             add_row("energy_s1", collect_series([](const SystemMetrics &m) { return m.avg_energy_by_species[1]; }));
             add_row("energy_s2", collect_series([](const SystemMetrics &m) { return m.avg_energy_by_species[2]; }));
             add_row("energy_s3", collect_series([](const SystemMetrics &m) { return m.avg_energy_by_species[3]; }));
+            add_row("cognitive_load", collect_series([](const SystemMetrics &m) { return m.avg_cognitive_load; }));
 
             out << "</table>";
         }
@@ -526,6 +596,27 @@ bool generate_dump_report_html(const ReportOptions &opts, std::string &error) {
             out << "</td>";
             out << "</tr>";
         }
+        out << "<tr>";
+        out << "<td>alpha_minus_beta</td>";
+        out << "<td>-</td>";
+        out << "<td>";
+        out << "min=" << std::fixed << std::setprecision(4) << step.alpha_beta_stats.min << "<br>";
+        out << "max=" << std::fixed << std::setprecision(4) << step.alpha_beta_stats.max << "<br>";
+        out << "mean=" << std::fixed << std::setprecision(4) << step.alpha_beta_stats.mean << "<br>";
+        out << "stddev=" << std::fixed << std::setprecision(4) << step.alpha_beta_stats.stddev << "<br>";
+        out << "nonzero_ratio=" << std::fixed << std::setprecision(4) << step.alpha_beta_stats.nonzero_ratio << "<br>";
+        out << "p95=" << std::fixed << std::setprecision(4) << step.alpha_beta_stats.p95 << "<br>";
+        out << "entropy=" << std::fixed << std::setprecision(4) << step.alpha_beta_stats.entropy << "<br>";
+        out << "norm_entropy=" << std::fixed << std::setprecision(4) << step.alpha_beta_stats.norm_entropy;
+        out << "</td>";
+        out << "<td>";
+        if (opts.downsample > 0 && !step.alpha_beta_preview.empty()) {
+            out << "<div class=\"preview\">" << step.alpha_beta_preview << "</div>";
+        } else {
+            out << "-";
+        }
+        out << "</td>";
+        out << "</tr>";
         out << "</table>";
     }
 

@@ -4,10 +4,12 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <iostream>
 #include <memory>
 #include <regex>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 struct Row;
@@ -28,6 +30,8 @@ std::string to_lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return s;
 }
+
+bool parse_number(const std::string &s, double &out);
 
 std::string trim(const std::string &s) {
     size_t start = 0;
@@ -684,6 +688,55 @@ void collect_agg_specs(const Expr *expr, std::vector<AggSpec> &out) {
     if (expr->rhs) collect_agg_specs(expr->rhs.get(), out);
 }
 
+bool is_unquoted_identifier_token(const std::string &raw) {
+    if (raw.empty()) return false;
+    char a = raw.front();
+    if (a == '\'' || a == '"') return false;
+    if (raw.find('(') != std::string::npos || raw.find(')') != std::string::npos) return false;
+    std::string lower = to_lower(raw);
+    if (lower == "null" || lower == "true" || lower == "false") return false;
+    double num = 0.0;
+    if (parse_number(raw, num)) return false;
+    return true;
+}
+
+void collect_unknown_where_columns(const Expr *expr, const Row &schema_row, std::unordered_set<std::string> &out) {
+    if (!expr) return;
+    auto check_lhs = [&](const Expr *lhs) {
+        if (!lhs || lhs->kind != Expr::VALUE) return;
+        const std::string &raw = lhs->value;
+        if (!is_unquoted_identifier_token(raw)) return;
+        std::string key = to_lower(raw);
+        if (schema_row.values.find(key) == schema_row.values.end()) {
+            out.insert(raw);
+        }
+    };
+    switch (expr->kind) {
+        case Expr::COMPARE:
+        case Expr::BETWEEN:
+        case Expr::IN_LIST:
+        case Expr::IN_SUBQUERY:
+        case Expr::LIKE:
+        case Expr::REGEXP:
+        case Expr::IS_NULL:
+            check_lhs(expr->lhs.get());
+            break;
+        case Expr::VALUE:
+            check_lhs(expr);
+            break;
+        case Expr::AND:
+        case Expr::OR:
+        case Expr::NOT:
+            if (expr->lhs) collect_unknown_where_columns(expr->lhs.get(), schema_row, out);
+            if (expr->rhs) collect_unknown_where_columns(expr->rhs.get(), schema_row, out);
+            break;
+        default:
+            if (expr->lhs) collect_unknown_where_columns(expr->lhs.get(), schema_row, out);
+            if (expr->rhs) collect_unknown_where_columns(expr->rhs.get(), schema_row, out);
+            break;
+    }
+}
+
 bool parse_number(const std::string &s, double &out) {
     try {
         size_t idx = 0;
@@ -1077,7 +1130,15 @@ Cell eval_value(const Expr *expr, const Row &row, const Row *outer) {
             }
             return eval_function(raw, row, outer);
         }
-        return get_value(row, outer, raw);
+        Cell c = get_value(row, outer, raw);
+        if (!c.is_null) {
+            return c;
+        }
+        // Allow bare literals like vorname=Karoline without quotes.
+        if (raw.find('.') == std::string::npos) {
+            return make_cell(raw, false);
+        }
+        return c;
     }
     return Cell{"", true, false, 0.0};
 }
@@ -1422,6 +1483,14 @@ bool execute_single_sql(const DbWorld &world,
         out.columns.clear();
         out.rows.clear();
         return true;
+    }
+
+    if (q.where_expr) {
+        std::unordered_set<std::string> unknown_cols;
+        collect_unknown_where_columns(q.where_expr.get(), rows.front(), unknown_cols);
+        for (const auto &name : unknown_cols) {
+            std::cout << "WARNUNG: Unbekannte Spalte in WHERE: " << name << "\n";
+        }
     }
 
     for (const auto &join : q.joins) {

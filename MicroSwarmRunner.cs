@@ -35,12 +35,17 @@ public class MicroSwarmRunner : MonoBehaviour, IDisposable
         public float mycel_drive_threshold;
         public float mycel_drive_p;
         public float mycel_drive_r;
+        public float mycel_inhibitor_weight;
+        public float mycel_inhibitor_gain;
+        public float mycel_inhibitor_decay;
+        public float mycel_inhibitor_threshold;
 
         public float agent_move_cost;
         public float agent_harvest;
         public float agent_deposit_scale;
         public float agent_sense_radius;
         public float agent_random_turn;
+        public float info_metabolism_cost;
 
         public int dna_capacity;
         public int dna_global_capacity;
@@ -60,6 +65,29 @@ public class MicroSwarmRunner : MonoBehaviour, IDisposable
         public float evo_age_decay;
 
         public float global_spawn_frac;
+
+        public int toxic_enable;
+        public float toxic_max_fraction;
+        public int toxic_stride_min;
+        public int toxic_stride_max;
+        public int toxic_iters_min;
+        public int toxic_iters_max;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+        public float[] toxic_max_fraction_by_quadrant;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+        public float[] toxic_max_fraction_by_species;
+
+        public int logic_mode;
+        public int logic_input_ax;
+        public int logic_input_ay;
+        public int logic_input_bx;
+        public int logic_input_by;
+        public int logic_output_x;
+        public int logic_output_y;
+        public int logic_pulse_period;
+        public float logic_pulse_strength;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -173,7 +201,29 @@ public class MicroSwarmRunner : MonoBehaviour, IDisposable
                 width = width,
                 height = height,
                 agent_count = agents,
-                steps = 0
+                steps = 0,
+                info_metabolism_cost = 0.005f,
+                mycel_inhibitor_weight = 0.9f,
+                mycel_inhibitor_gain = 0.12f,
+                mycel_inhibitor_decay = 0.02f,
+                mycel_inhibitor_threshold = 0.45f,
+                toxic_enable = 1,
+                toxic_max_fraction = 1.0f,
+                toxic_stride_min = 1,
+                toxic_stride_max = 64,
+                toxic_iters_min = 0,
+                toxic_iters_max = 256,
+                toxic_max_fraction_by_quadrant = new float[] {1f, 1f, 1f, 1f},
+                toxic_max_fraction_by_species = new float[] {1f, 1f, 1f, 1f},
+                logic_mode = 0,
+                logic_input_ax = -1,
+                logic_input_ay = -1,
+                logic_input_bx = -1,
+                logic_input_by = -1,
+                logic_output_x = -1,
+                logic_output_y = -1,
+                logic_pulse_period = 20,
+                logic_pulse_strength = 10.0f
             },
             seed = seed
         };
