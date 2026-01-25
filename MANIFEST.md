@@ -120,7 +120,7 @@ oder **klarer machen**, nicht wenn sie den Kern verwischen.
 
 ---
 
-## Related Work (kanonisch, Paper-faehig)
+## Related Work 
 
 **Related Work.**
 Stigmergic clustering (z. B. Lumer & Faieta; [LF1994]) demonstriert selbstorganisierte
@@ -258,4 +258,5 @@ Die Datenbank wird zum Organismus; der Organismus bleibt abfragbar.
 - `src/sim/agent.cpp`
 - `src/sim/mycel.cpp`
 - `src/compute/opencl_runtime.cpp`
+
 
